@@ -1,15 +1,15 @@
-/* Copyright (C) 2011-2013 by Jacob Alexander
- * 
+/* Copyright (C) 2011-2014 by Jacob Alexander
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -23,9 +23,6 @@
 
 // Compiler Includes
 #include <Lib/USBLib.h>
-
-// Project Includes
-#include <scan_loop.h>
 
 // USB Includes
 #if defined(_at90usb162_) || defined(_atmega32u4_) || defined(_at90usb646_) || defined(_at90usb1286_)
@@ -84,24 +81,5 @@ inline void usb_setup(void)
 	// Wait an extra second for the PC's operating system to load drivers
 	// and do whatever it does to actually be ready for input
 	//_delay_ms(1000); // TODO
-}
-
-
-// USB Data Send
-inline void usb_send(void)
-{
-		// TODO undo potentially old keys
-		for ( uint8_t c = USBKeys_Sent; c < USBKeys_MaxSize; c++ )
-			USBKeys_Array[c] = 0;
-
-		// Send keypresses
-		usb_keyboard_send();
-
-		// Clear modifiers and keys
-		USBKeys_Modifiers = 0;
-		USBKeys_Sent      = 0;
-
-		// Signal Scan Module we are finishedA
-		scan_finishedWithUSBBuffer( USBKeys_Sent <= USBKeys_MaxSize ? USBKeys_Sent : USBKeys_MaxSize );
 }
 

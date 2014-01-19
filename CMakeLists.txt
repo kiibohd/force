@@ -1,6 +1,6 @@
 ###| CMAKE Kiibohd Controller |###
 #
-# Jacob Alexander 2011-2013
+# Jacob Alexander 2011-2014
 # Due to this file's usefulness:
 #
 # Released into the Public Domain
@@ -68,8 +68,6 @@ include( setup.cmake )
 set( SRCS
 	main.c
 	${COMPILER_SRCS}
-	${SCAN_SRCS}
-	${MACRO_SRCS}
 	${USB_SRCS}
 	${DEBUG_SRCS}
 )
@@ -84,8 +82,6 @@ include_directories( ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} )
 #
 
 #| Check for whether the set modules are compatible with the specified compiler family
-ModuleCompatibility( ${ScanModulePath}  ${ScanModuleCompatibility}  )
-ModuleCompatibility( ${MacroModulePath} ${MacroModuleCompatibility} )
 ModuleCompatibility( ${USBModulePath}   ${USBModuleCompatibility}   )
 ModuleCompatibility( ${DebugModulePath} ${DebugModuleCompatibility} )
 
