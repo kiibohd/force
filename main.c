@@ -25,7 +25,7 @@
 #include <Lib/MainLib.h>
 
 // Project Includes
-#include <usb_com.h>
+#include <output_com.h>
 
 #include <led.h>
 #include <print.h>
@@ -58,7 +58,11 @@ int main(void)
 	pinSetup();
 	init_errorLED();
 
-	usb_setup();
+	// Setup Output Module
+	output_setup();
+
+	// Enable CLI
+	init_cli();
 
 	errorLED( 1 );
 
