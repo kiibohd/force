@@ -13,10 +13,10 @@
 #
 
 ##| Sends the current list of usb key codes through USB HID
-set(   USBModule  "pjrc"   )
+set( OutputModule  "pjrcUSB" )
 
 ##| Debugging source to use, each module has it's own set of defines that it sets
-set( DebugModule  "full"   )
+set( DebugModule   "full"    )
 
 
 
@@ -33,8 +33,8 @@ endif ()
 ###
 # Path Setup
 #
-set(   USBModulePath   "USB/${USBModule}"   )
-set( DebugModulePath "Debug/${DebugModule}" )
+set( OutputModulePath "Output/${OutputModule}" )
+set(  DebugModulePath  "Debug/${DebugModule}"  )
 
 #| Top-level directory adjustment
 set( HEAD_DIR "${CMAKE_CURRENT_SOURCE_DIR}" )
@@ -70,7 +70,7 @@ add_definitions()
 
 #| Include path for each of the modules
 add_definitions(
-	-I${HEAD_DIR}/${USBModulePath}
+	-I${HEAD_DIR}/${OutputModulePath}
 	-I${HEAD_DIR}/${DebugModulePath}
 )
 
@@ -98,9 +98,9 @@ macro( PathPrepend Output SourcesPath )
 endmacro()
 
 
-#| USB Module
-include    (             "${USBModulePath}/setup.cmake"  )
-PathPrepend(   USB_SRCS   ${USBModulePath} ${USB_SRCS}   )
+#| Output Module
+include    (             "${OutputModulePath}/setup.cmake"   )
+PathPrepend( OUTPUT_SRCS  ${OutputModulePath} ${OUTPUT_SRCS} )
 
 #| Debugging Module
 include    (           "${DebugModulePath}/setup.cmake"  )
@@ -109,7 +109,7 @@ PathPrepend( DEBUG_SRCS ${DebugModulePath} ${DEBUG_SRCS} )
 
 #| Print list of all module sources
 message( STATUS "Detected USB Module Source Files:" )
-message( "${USB_SRCS}" )
+message( "${OUTPUT_SRCS}" )
 message( STATUS "Detected Debug Module Source Files:" )
 message( "${DEBUG_SRCS}" )
 

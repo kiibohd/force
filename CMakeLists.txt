@@ -68,7 +68,7 @@ include( setup.cmake )
 set( SRCS
 	main.c
 	${COMPILER_SRCS}
-	${USB_SRCS}
+	${OUTPUT_SRCS}
 	${DEBUG_SRCS}
 )
 
@@ -82,8 +82,8 @@ include_directories( ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} )
 #
 
 #| Check for whether the set modules are compatible with the specified compiler family
-ModuleCompatibility( ${USBModulePath}   ${USBModuleCompatibility}   )
-ModuleCompatibility( ${DebugModulePath} ${DebugModuleCompatibility} )
+ModuleCompatibility( ${OutputModulePath} ${OutputModuleCompatibility}   )
+ModuleCompatibility( ${DebugModulePath}  ${DebugModuleCompatibility} )
 
 
 
