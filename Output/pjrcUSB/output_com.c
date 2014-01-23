@@ -70,7 +70,7 @@ volatile uint8_t USBKeys_LEDs = 0;
 // ----- Functions -----
 
 // USB Module Setup
-inline void output_setup(void)
+inline void output_setup()
 {
 	// Initialize the USB, and then wait for the host to set configuration.
 	// If the Teensy is powered without a PC connected to the USB port,
@@ -81,5 +81,15 @@ inline void output_setup(void)
 	// Wait an extra second for the PC's operating system to load drivers
 	// and do whatever it does to actually be ready for input
 	//_delay_ms(1000); // TODO
+}
+
+
+// Sets the device into firmware reload mode
+inline void output_firmwareReload()
+{
+#if defined(_at90usb162_) || defined(_atmega32u4_) || defined(_at90usb646_) || defined(_at90usb1286_)
+#elif defined(_mk20dx128_)
+	usb_device_reload();
+#endif
 }
 
