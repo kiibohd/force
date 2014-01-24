@@ -54,6 +54,7 @@ void cliFunc_zeroPosition( char* args );
 // ----- Variables -----
 
 // Force Gauge command dictionary
+char*       forceGaugeCLIDictName = "Force Gauge Commands";
 CLIDictItem forceGaugeCLIDict[] = {
 	{ "free",          "Enables free reporting, reports every distance unit (as defined by the calipers).", cliFunc_free },
 	{ "gaugeHelp",     "Description on how to use the force gauge firmware.", cliFunc_gaugeHelp },
@@ -86,7 +87,7 @@ int main(void)
 	init_cli();
 
 	// Register Force Gauge dictionary
-	registerDictionary_cli( forceGaugeCLIDict );
+	registerDictionary_cli( forceGaugeCLIDict, forceGaugeCLIDictName );
 
 	// Main loop
 	while ( 1 )
