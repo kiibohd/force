@@ -41,8 +41,28 @@
 
 
 
+// ----- Function Declarations -----
+
+void cliFunc_free        ( char* args );
+void cliFunc_gaugeHelp   ( char* args );
+void cliFunc_single      ( char* args );
+void cliFunc_start       ( char* args );
+void cliFunc_zeroForce   ( char* args );
+void cliFunc_zeroPosition( char* args );
+
+
 // ----- Variables -----
 
+// Force Gauge command dictionary
+CLIDictItem forceGaugeCLIDict[] = {
+	{ "free",          "Enables free reporting, reports every distance unit (as defined by the calipers).", cliFunc_free },
+	{ "gaugeHelp",     "Description on how to use the force gauge firmware.", cliFunc_gaugeHelp },
+	{ "single",        "Query a single force/distance measurement.", cliFunc_single },
+	{ "start",         "Mark the current distance as the start/end position.", cliFunc_start },
+	{ "zeroForce",     "Zero out the force gauge.", cliFunc_zeroForce },
+	{ "zeroPosition",  "Mark the minimum distance for this measurement (bottom).", cliFunc_zeroPosition },
+	{ 0, 0, 0 } // Null entry for dictionary end
+};
 
 
 // ----- Functions -----
@@ -65,9 +85,10 @@ int main(void)
 	// Enable CLI
 	init_cli();
 
-	errorLED( 1 );
-	erro_print("Detection loop error, this is very bad...bug report!");
+	// Register Force Gauge dictionary
+	registerDictionary_cli( forceGaugeCLIDict );
 
+	// Main loop
 	while ( 1 )
 	{
 		process_cli();
@@ -77,4 +98,36 @@ int main(void)
 
 // ----- Interrupts -----
 
+
+
+// ----- CLI Command Functions -----
+
+void cliFunc_free( char* args )
+{
+}
+
+
+void cliFunc_gaugeHelp( char* args )
+{
+}
+
+
+void cliFunc_single( char* args )
+{
+}
+
+
+void cliFunc_start( char* args )
+{
+}
+
+
+void cliFunc_zeroForce( char* args )
+{
+}
+
+
+void cliFunc_zeroPosition( char* args )
+{
+}
 
