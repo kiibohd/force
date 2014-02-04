@@ -48,29 +48,42 @@ void cliFunc_distRead    ( char* args );
 void cliFunc_free        ( char* args );
 void cliFunc_gaugeHelp   ( char* args );
 void cliFunc_imadaComm   ( char* args );
-void cliFunc_single      ( char* args );
+void cliFunc_read        ( char* args );
 void cliFunc_start       ( char* args );
+void cliFunc_stop        ( char* args );
 void cliFunc_zeroForce   ( char* args );
 void cliFunc_zeroPosition( char* args );
+
+char receiveUART0Char();
+
+void transmitUART0String( char* str );
+
+uint32_t readDistanceGauge();
 
 
 // ----- Variables -----
 
 // Force Gauge command dictionary
-char*       forceGaugeCLIDictName = "Force Gauge Commands";
+char*       forceGaugeCLIDictName = "Force Curve Gauge Commands";
 CLIDictItem forceGaugeCLIDict[] = {
 	{ "distRead",      "Read the current value from the distance gauge.  See \033[35mgaugeHelp\033[0m for more details.", cliFunc_distRead },
 	{ "free",          "Enables free reporting, reports every distance unit (as defined by the calipers).", cliFunc_free },
 	{ "gaugeHelp",     "Description on how to use the force gauge firmware.", cliFunc_gaugeHelp },
 	{ "imadaComm",     "Send specific commands to the Imada force gauge. See \033[35mgaugeHelp\033[0m for more details.", cliFunc_imadaComm },
-	{ "single",        "Query a single force/distance measurement.", cliFunc_single },
+	{ "read",          "Query a force/distance measurement. See \033[35mgaugeHelp\033[0m for more details.", cliFunc_read },
 	{ "start",         "Mark the current distance as the start/end position.", cliFunc_start },
+	{ "stop",          "Stop free reporting or read loop.", cliFunc_stop },
 	{ "zeroForce",     "Zero out the force gauge.", cliFunc_zeroForce },
 	{ "zeroPosition",  "Mark the minimum distance for this measurement (bottom).", cliFunc_zeroPosition },
 	{ 0, 0, 0 } // Null entry for dictionary end
 };
 
 uint8_t force_freeRunning;
+
+uint32_t distanceStart          = 0; // Offset is not used
+uint32_t distanceOffset         = 0;
+uint32_t forceDistanceRead      = 0;
+int32_t  forceDistanceReadCount = 0;
 
 
 // ----- Functions -----
@@ -87,7 +100,6 @@ inline void pinSetup()
 
 	PORTC_PCR1 = PORT_PCR_PFE | PORT_PCR_PE | PORT_PCR_PS | PORT_PCR_MUX(1);
 	PORTC_PCR2 = PORT_PCR_DSE | PORT_PCR_MUX(1);
-
 }
 
 
@@ -200,23 +212,85 @@ int main()
 	// Setup force gauge
 	forceSetup();
 
+	// Loop variables
+	uint32_t currentDistance = 0;
+	uint32_t    lastDistance = 0;
+	char     currentForce[40];
+	uint8_t  currentForceLen = 0;
+	uint8_t  startEndCount   = 0;
+
 	// Main loop
 	while ( 1 )
 	{
 		// Process CLI
 		process_cli();
 
-		// Query force
-		// TODO
+		// Only enter read loop if activated
+		if ( forceDistanceRead || --forceDistanceReadCount > 0 )
+		{
+			// - Query force -
+			// Write command to data register
+			//  NOTE: Imada only uses single byte commands, this makes it easy
+			//        Always followed by a '\r' CR
+			char outCmd[] = { 'D', '\r', 0x00 };
+			transmitUART0String( outCmd );
 
-		// Read Distance
-		// TODO
 
-		// Read force
-		// TODO
+			// - Read Distance -
+			currentDistance = readDistanceGauge();
 
-		// Output data
-		// TODO
+			// - Read force -
+			// Read until a CR is read
+			while ( 1 )
+			{
+				currentForce[currentForceLen] = receiveUART0Char();
+
+				// Stop reading if the character was a CR
+				if ( currentForce[currentForceLen++] == '\r' )
+				{
+					currentForce[currentForceLen] = '\0'; // Cap string with a NULL
+					break;
+				}
+			}
+
+			// Scan Imada force string and remove units (ignore all ascii below '9')
+			char *strPtr = currentForce;
+			while ( *++strPtr <= '9' );
+			*strPtr = '\0';
+
+			// - Output data -
+			// If the distance has changed, output the data
+			if ( currentDistance != lastDistance || forceDistanceReadCount > 0 )
+			{
+				// Check to see if start/end marker has been reached
+				if ( startEndCount == 0 && currentDistance <= distanceStart )
+				{
+					print("::Start::" NL);
+					startEndCount++;
+				}
+				else if ( startEndCount == 1 && currentDistance >= distanceStart )
+				{
+					print("::End::" NL);
+					startEndCount = 0;
+				}
+
+				// Display the current force/distance pair
+				print("::");
+				dPrint( currentForce );
+				print(" gf:");
+				printInt32( ( currentDistance * 9921 ) / 1000 ); // Convert to um, see cliFunc_distRead
+				print(" um::" NL);
+			}
+
+			// Prepare for next iteration
+			lastDistance = currentDistance;
+			currentForceLen = 0;
+		}
+		else
+		{
+			// So consecutive reads will work
+			lastDistance = 0;
+		}
 	}
 }
 
@@ -315,7 +389,7 @@ void cliFunc_distRead( char* args )
 		info_msg("Distance: ");
 
 		// Data
-		uint32_t distInput = readDistanceGauge();
+		uint32_t distInput = readDistanceGauge() - distanceOffset;
 
 		// Output result
 		printInt32( distInput );
@@ -365,6 +439,36 @@ void cliFunc_distRead( char* args )
 
 void cliFunc_free( char* args )
 {
+	// Set the forceDistanceRead to 1, which will read until start has passed twice
+	forceDistanceRead = 1;
+}
+
+
+void imadaVerboseRead( char* cmd )
+{
+	// Write command to data register
+	//  NOTE: Imada only uses single byte commands, this makes it easy
+	//        Always followed by a '\r' CR
+	char outCmd[] = { *cmd, '\r', 0x00 };
+	transmitUART0String( outCmd );
+
+	// Prepare to print output
+	print( NL );
+	info_msg("Imada: ");
+	char inputChar[] = { 0x00, 0x00 };
+
+	// Read until a CR is read
+	while ( 1 )
+	{
+		inputChar[0] = receiveUART0Char();
+
+		// Stop reading if the character was a CR
+		if ( inputChar[0] == '\r' )
+			break;
+
+		// Print out the character
+		dPrint( inputChar );
+	}
 }
 
 
@@ -384,56 +488,119 @@ void cliFunc_imadaComm( char* args )
 		return;
 	}
 
-	// Write command to data register
-	//  NOTE: Imada only uses single byte commands, this makes it easy
-	//        Always followed by a '\r' CR
-	char outCmd[] = { *arg1Ptr, '\r', 0x00 };
-	transmitUART0String( outCmd );
-
-	// Prepare to print output
-	print( NL );
-	info_msg("Imada: ");
-	char inputChar[] = { 0x00, 0x00 };
-
-	// Read until a CR is read
-	while ( 1 )
-	{
-		inputChar[0] = receiveUART0Char();
-
-		// Stop reading if the character was a CR
-		if ( inputChar[0] == '\r' )
-		{
-			print("[CR]");
-			break;
-		}
-
-		// Print out the character
-		dPrint( inputChar );
-	}
+	imadaVerboseRead( arg1Ptr );
 }
 
 
 void cliFunc_gaugeHelp( char* args )
 {
+	print( NL
+"\033[1;32mForce Curve Gauge Help\033[0m" NL
+" \033[1;33mUsage Overview\033[0m" NL
+"  TODO" NL
+" \033[1;33mAdditional Command Details\033[0m" NL
+"  \033[1;35mdistRead\033[0m" NL
+"     Reads the current value from the distance gauge." NL
+"     If specified it will N repeated reads with a delay after each read. Useful for testing the distance gauge." NL
+"       e.g. \033[35mdistRead 250\033[0m" NL
+"  \033[1;35mfree\033[0m" NL
+"     Start free scanning force/distance reads." NL
+"     Will continue until the [start] distance point has been past twice." NL
+"  \033[1;35mimadaComm\033[0m" NL
+"     Sends a command to the Imada force gauge." NL
+"       e.g. \033[35mimadaComm D\033[0m" NL
+"     The commands supported by the gauge depends on the model. Listed below is for the DS2." NL
+"       K  Select g  units (default)" NL
+"       N  Select N  units" NL
+"       O  Select oz units" NL
+"       P  Select peak mode" NL
+"       T  Select real time mode (default)" NL
+"       Z  Zero out display/reading" NL
+"       Q  Turn off power" NL
+"       E  Read high/low set points" NL
+"       D  Read data from force gauge" NL
+"       E\033[35mHHHHLLLL\033[0m" NL
+"          Set the high/low setpoints, ignore decimals" NL
+"          \033[35mHHHH\033[0m is 4 digit high, \033[35mLLLL\033[0m is 4 digit low" NL
+"     Responses from the above commands." NL
+"       R  Command successful" NL
+"       E  Error/Invalid Command" NL
+"       E\033[35mHHHHLLLL\033[0m" NL
+"          Current high/low setpoints" NL
+"          \033[35mHHHH\033[0m is 4 digit high, \033[35mLLLL\033[0m is 4 digit low" NL
+"       \033[35m[value][units][mode]\033[0m" NL
+"          Data read response" NL
+"          \033[35m[value]\033[0m is force currently showing on the display (peak or realtime)" NL
+"          \033[35m[units]\033[0m is the configured force units" NL
+"          \033[35m[mode]\033[0m  is the current mode (peak or realtime)" NL
+"  \033[1;35mread\033[0m" NL
+"     Read the current force/distance value." NL
+"     If specified it will N repeated reads with a delay after each read." NL
+"       e.g. \033[35mread 125\033[0m" NL
+"  \033[1;35mstart\033[0m" NL
+"     Distance marker \033[35m[start]\033[0m for the start/end of a force curve measurement." NL
+"     While in free running mode, a special message is displayed when reaching the \033[35m[start]\033[0m point." NL
+"       \033[35m[start]\033[0m is defined by positioning the distance sensor at the position to start and running this command." NL
+		);
 }
 
 
-void cliFunc_single( char* args )
+void cliFunc_read( char* args )
 {
+	// Parse number from argument
+	//  NOTE: Only first argument is used
+	char* arg1Ptr;
+	char* arg2Ptr;
+	argumentIsolation_cli( args, &arg1Ptr, &arg2Ptr );
+
+	// Convert the argument into an int
+	int read_count = decToInt( arg1Ptr ) + 1;
+
+	// If no argument specified, default to 1 read
+	if ( *arg1Ptr == '\0' )
+	{
+		read_count = 2;
+	}
+
+	// Set the overall read count to read_count
+	forceDistanceReadCount = read_count;
 }
 
 
 void cliFunc_start( char* args )
 {
+	// Read the current distance and set the new start/end position
+	distanceStart = readDistanceGauge();
+
+	print( NL );
+	info_msg("New start/end position: ");
+	printInt32( distanceStart - distanceOffset );
+}
+
+
+void cliFunc_stop( char* args )
+{
+	// Reset the forceDistanceRead and forceDistanceReadCount
+	forceDistanceRead = 0;
+	forceDistanceReadCount = 0;
 }
 
 
 void cliFunc_zeroForce( char* args )
 {
+	// Just use the imadaComm command sending the needed argument
+	char* commandArg = "Z";
+	imadaVerboseRead( commandArg );
 }
 
 
 void cliFunc_zeroPosition( char* args )
 {
+	// Read the current distance and set the new offset
+	distanceOffset = readDistanceGauge();
+
+	print( NL );
+	info_msg("New distance offset: ");
+	printInt32( distanceOffset );
 }
 
