@@ -131,6 +131,8 @@ def processCommandLineArgs( varContainer ):
 	pArgs.add_argument( 'switch_name',  help=argparse.SUPPRESS ) # Suppressed help output, because Python output is verbosely ugly
 
 	# Optional Arguments
+	pArgs.add_argument( '-o', '--start-offset', type=int, default=0,
+		help="Specify a start offset, useful if measurement sensor is being jittery for whatever reason.\n  Use base sensor units." )
 	pArgs.add_argument( '-h', '--help', action="help",
 		help="This message." )
 
@@ -138,9 +140,10 @@ def processCommandLineArgs( varContainer ):
 	args = pArgs.parse_args()
 
 	# Parameters
-	varContainer['SwitchName'] = args.switch_name
-	varContainer['SerialPort'] = args.serial_port
-	varContainer['Filename']   = "{0}.raw".format( varContainer['SwitchName'] )
+	varContainer['StartOffset'] = args.start_offset
+	varContainer['SwitchName']  = args.switch_name
+	varContainer['SerialPort']  = args.serial_port
+	varContainer['Filename']    = "{0}.raw".format( varContainer['SwitchName'] )
 
 	# Check file existance, and rename if necessary
 	counter = 1
@@ -169,8 +172,8 @@ def recordData( varContainer, forceData ):
 	# Initialize serial port, USB serial port is used, speed does not have to be negotiated
 	ser = serial.Serial( varContainer['SerialPort'], timeout=2 )
 
-	# Mark the start/end position of the reading
-	cmdOut = sendCmd( ser, "start" )
+	# Mark the start/end position of the reading give, with a given offset
+	cmdOut = sendCmd( ser, "start {0}".format( varContainer['StartOffset'] ) )
 
 	# Start the free recording
 	print "Initiating force curve reading..."

@@ -75,7 +75,7 @@ CLIDictItem forceGaugeCLIDict[] = {
 	{ "gaugeHelp",     "Description on how to use the force gauge firmware.", cliFunc_gaugeHelp },
 	{ "imadaComm",     "Send specific commands to the Imada force gauge. See \033[35mgaugeHelp\033[0m for more details.", cliFunc_imadaComm },
 	{ "read",          "Query a force/distance measurement. See \033[35mgaugeHelp\033[0m for more details.", cliFunc_read },
-	{ "start",         "Mark the current distance as the start/end position.", cliFunc_start },
+	{ "start",         "Mark the current distance as the start/end position, offset is optional.", cliFunc_start },
 	{ "stop",          "Stop free reporting or read loop.", cliFunc_stop },
 	{ "zeroForce",     "Zero out the force gauge.", cliFunc_zeroForce },
 	{ "zeroPosition",  "Mark the minimum distance for this measurement (bottom).", cliFunc_zeroPosition },
@@ -589,6 +589,7 @@ void cliFunc_gaugeHelp( char* args )
 "     Distance marker \033[35m[start]\033[0m for the start/end of a force curve measurement." NL
 "     While in free running mode, a special message is displayed when reaching the \033[35m[start]\033[0m point." NL
 "       \033[35m[start]\033[0m is defined by positioning the distance sensor at the position to start and running this command." NL
+"     The argument is an offset integer." NL
 		);
 }
 
@@ -617,8 +618,17 @@ void cliFunc_read( char* args )
 
 void cliFunc_start( char* args )
 {
+	// Parse number from argument
+	//  NOTE: Only first argument is used
+	char* arg1Ptr;
+	char* arg2Ptr;
+	argumentIsolation_cli( args, &arg1Ptr, &arg2Ptr );
+
+	// Convert the argument into an int
+	int offset = decToInt( arg1Ptr ) + 1;
+
 	// Read the current distance and set the new start/end position
-	distanceStart = readDistanceGauge();
+	distanceStart = readDistanceGauge() + offset;
 
 	print( NL );
 	info_msg("New start/end position: ");
