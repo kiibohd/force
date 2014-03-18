@@ -45,6 +45,7 @@
 // ----- Function Declarations -----
 
 void cliFunc_distRead    ( char* args );
+void cliFunc_contRead    ( char* args );
 void cliFunc_free        ( char* args );
 void cliFunc_gaugeHelp   ( char* args );
 void cliFunc_imadaComm   ( char* args );
@@ -60,12 +61,15 @@ void transmitUART0String( char* str );
 
 uint32_t readDistanceGauge();
 
+void continuityTest();
+
 
 // ----- Variables -----
 
 // Force Gauge command dictionary
 char*       forceGaugeCLIDictName = "Force Curve Gauge Commands";
 CLIDictItem forceGaugeCLIDict[] = {
+	{ "contRead",      "Read the continuity value. Needs to be attachd to two terminals on a switch. Strobe/Sense.", cliFunc_contRead },
 	{ "distRead",      "Read the current value from the distance gauge.  See \033[35mgaugeHelp\033[0m for more details.", cliFunc_distRead },
 	{ "free",          "Enables free reporting, reports every distance unit (as defined by the calipers).", cliFunc_free },
 	{ "gaugeHelp",     "Description on how to use the force gauge firmware.", cliFunc_gaugeHelp },
@@ -79,6 +83,7 @@ CLIDictItem forceGaugeCLIDict[] = {
 };
 
 uint8_t force_freeRunning;
+uint8_t continuityState         = 2; // 0 - None, 1 - Continuity
 
 uint32_t distanceStart          = 0; // Offset is not used
 uint32_t distanceOffset         = 0;
@@ -98,8 +103,19 @@ inline void pinSetup()
 	GPIOC_PDDR &= ~(1<<1); // Input
 	GPIOC_PDDR |=  (1<<2); // Output
 
-	PORTC_PCR1 = PORT_PCR_PFE | PORT_PCR_PE | PORT_PCR_PS | PORT_PCR_MUX(1);
+	PORTC_PCR1 = PORT_PCR_PFE | PORT_PCR_PE | PORT_PCR_PS | PORT_PCR_MUX(1); // Pullup resistor
 	PORTC_PCR2 = PORT_PCR_DSE | PORT_PCR_MUX(1);
+
+
+	// Continuity Tester Pin Setup
+	// 20 - D5 - Strobe
+	// 21 - D6 - Sense
+	// Enable pins
+	GPIOD_PDDR |=  (1<<5); // Output
+	GPIOD_PDDR &= ~(1<<6); // Input
+
+	PORTD_PCR5 = PORT_PCR_DSE | PORT_PCR_MUX(1);
+	PORTD_PCR6 = PORT_PCR_PFE | PORT_PCR_PE | PORT_PCR_MUX(1); // Pulldown resistor
 }
 
 
@@ -113,6 +129,7 @@ inline void uartSetup()
 	PORTB_PCR16 = PORT_PCR_PE | PORT_PCR_PS | PORT_PCR_PFE | PORT_PCR_MUX(3); // RX Pin
 	PORTB_PCR17 = PORT_PCR_DSE | PORT_PCR_SRE | PORT_PCR_MUX(3); // TX Pin
 
+//#define DPS_1R
 #define DS2_1
 #ifdef DPS_1R
 	// DPS-1R - Uses a much slower baud rate
@@ -239,6 +256,11 @@ int main()
 			// - Read Distance -
 			currentDistance = readDistanceGauge();
 
+
+			// - Query Continuity -
+			continuityTest();
+
+
 			// - Read force -
 			// Read until a CR is read
 			while ( 1 )
@@ -279,7 +301,9 @@ int main()
 				dPrint( currentForce );
 				print(" gf:");
 				printInt32( ( currentDistance * 9921 ) / 1000 ); // Convert to um, see cliFunc_distRead
-				print(" um::" NL);
+				print(" um:");
+				printInt8( continuityState );
+				print("::" NL);
 			}
 
 			// Prepare for next iteration
@@ -319,11 +343,16 @@ inline char receiveUART0Char()
 }
 
 
-// ----- Interrupt Functions -----
+// Test continuity
+inline void continuityTest()
+{
+	// Make sure strobe is set high
+	GPIOD_PSOR |= (1<<5);
 
+	// Sample the sense
+	continuityState = GPIOD_PDIR & (1<<6) ? 1 : 0;
+}
 
-
-// ----- CLI Command Functions -----
 
 uint32_t readDistanceGauge()
 {
@@ -363,6 +392,25 @@ uint32_t readDistanceGauge()
 
 	return distInput;
 }
+
+
+// ----- Interrupt Functions -----
+
+
+
+// ----- CLI Command Functions -----
+
+void cliFunc_contRead( char* args )
+{
+	// Query Continuity
+	continuityTest();
+
+	// Display Continuity
+	print( NL );
+	info_msg("Continuity: ");
+	print( continuityState ? "High - 1" : "Low - 0" );
+}
+
 
 void cliFunc_distRead( char* args )
 {
