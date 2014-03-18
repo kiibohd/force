@@ -1,0 +1,34 @@
+# <Title>
+# <Author>
+#   <Description>
+#
+# Created: <Date>
+# FCV Version: 0.2
+#
+
+# Graph Bounds
+X Minimum:     0
+X Maximum:     250
+X Resolution:  1
+Y Minimum:    -250
+Y Maximum:     250
+Y Resolution:  1
+
+# Statistics
+Force    Minimum: -10
+Force    Maximum:  38
+Distance Minimum:  0
+Distance Maximum:  4.43
+
+# Recorded Data (distance, force)
+Distance Units: mm
+Force    Units: gf
+
+[Recorded Forward]
+10,0
+9,3
+
+[Recorded Reverse]
+0,3
+10,0
+
