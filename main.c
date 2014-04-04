@@ -44,8 +44,8 @@
 
 // ----- Function Declarations -----
 
-void cliFunc_distRead    ( char* args );
 void cliFunc_contRead    ( char* args );
+void cliFunc_distRead    ( char* args );
 void cliFunc_free        ( char* args );
 void cliFunc_gaugeHelp   ( char* args );
 void cliFunc_imadaComm   ( char* args );
@@ -83,7 +83,7 @@ CLIDictItem forceGaugeCLIDict[] = {
 };
 
 uint8_t force_freeRunning;
-uint8_t continuityState         = 2; // 0 - None, 1 - Continuity
+uint8_t continuityState         = 0; // 0 - None, 1 - Continuity
 
 uint32_t distanceStart          = 0; // Offset is not used
 uint32_t distanceOffset         = 0;
