@@ -1,23 +1,17 @@
-The Kiibohd Controller
-======================
+Kiibohd Force
+=============
 
-This is the main Kiibohd Firmware.
-In general, this should be the **only** git repo you need to clone.
-The [KLL](https://github.com/kiibohd/kll) git repo is automatically cloned during the build process.
-
-Please refer to the [KLL](https://github.com/kiibohd/kll) repo or [kiibohd.com](http://kiibohd.com) for details on the KLL (Keyboard Layout Language) Spec.
+This is the firmware for the Kiibohd Force Curve Gauge.
+While this firmware is open, the hardware to build a proper force curve gauge is rather expensive :/
 
 
 
-Official Keyboards
+Supported Hardware
 ------------------
 
-* MD1      (Infinity Keyboard/IC60 2014/10/15)
-* MDErgo1  (Infinity Ergodox /ICED 2015/03/31)
-* WhiteFox (Soon to be released?)
-
-
-The Kiibohd firmware supports a lot of other keyboards, but these are more obscure/custom/lesser known.
+* Image Force Gauges (Analog Out)
+* iGaging 35-712-P
+* AEL-200-500N Motorized Force Stand
 
 
 
@@ -27,30 +21,15 @@ Compilation
 Compilation is possible and tested on Windows/Linux/Mac.
 Linux is the easiest using this [VM](https://s3.amazonaws.com/configurator-assets/ArchLinux_kiibohd_2015-02-13.tar.gz).
 
-For most people refer [here](https://github.com/kiibohd/controller/tree/master/Keyboards).
-
-For the full compilation details, please refer to the [wiki](https://github.com/kiibohd/controller/wiki).
+Refer to the Kiibohd Controller for detailed compilation instructions.
 
 
 
 Supported Microcontrollers
 --------------------------
 
-* Teensy 2.0 (Partial)
-* Teensy 2.0++
 * Teesny 3.0
 * Teensy 3.1
-* mk20dx128vlf5
-* mk20dx256vlh7
-
-
-Adding support for more microcontrollers is possible.
-Some considerations for minimum specs:
-
-* ~8  kB of SRAM
-* ~25 kB of Flash
-
-It's possible to port chips with lower specs, but will be more effort and have fewer features.
 
 
 
