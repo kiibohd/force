@@ -1,4 +1,4 @@
-/* Copyright (C) 2014 by Jacob Alexander
+/* Copyright (C) 2014-2015 by Jacob Alexander
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -19,8 +19,7 @@
  * THE SOFTWARE.
  */
 
-#ifndef cli_h__
-#define cli_h__
+#pragma once
 
 // ----- Includes -----
 
@@ -34,17 +33,50 @@
 // ----- Defines -----
 
 #define CLILineBufferMaxSize 100
-#define CLIMaxDictionaries   5
+#define CLIMaxDictionaries   10
 #define CLIEntryTabAlign     13
+#define CLIMaxHistorySize    10
+
+
+// ----- Macros -----
+
+// AVR CLI Dictionary definitions (has to deal with the annoying PROGMEM
+// Only using PROGMEM with descriptions (all the string comparison tools need to be re-written otherwise)
+#if defined(_at90usb162_) || defined(_atmega32u4_) || defined(_at90usb646_) || defined(_at90usb1286_) // AVR
+#define CLIDict_Def(name,description) \
+	const PROGMEM char name##Name[] = description; \
+	const CLIDictItem name[]
+
+#define CLIDict_Item(name) \
+	{ #name, name##CLIDict_DescEntry, (const void (*)(char*))cliFunc_##name }
+
+#define CLIDict_Entry(name,description) \
+	const PROGMEM char name##CLIDict_DescEntry[] = description;
+
+// ARM is easy :P
+#elif defined(_mk20dx128_) || defined(_mk20dx128vlf5_) || defined(_mk20dx256_) || defined(_mk20dx256vlh7_) // ARM
+#define CLIDict_Def(name,description) \
+	const char name##Name[] = description; \
+	const CLIDictItem name[]
+
+#define CLIDict_Item(name) \
+	{ #name, name##CLIDict_DescEntry, (const void (*)(char*))cliFunc_##name }
+
+#define CLIDict_Entry(name,description) \
+	const char name##CLIDict_DescEntry[] = description;
+#endif
+
+#define RING_PREV(i) CLI_wrap(i - 1, 0, CLIMaxHistorySize - 1)
+#define RING_NEXT(i) CLI_wrap(i + 1, 0, CLIMaxHistorySize - 1)
 
 
 // ----- Structs -----
 
 // Each item has a name, description, and function pointer with an argument for arguments
 typedef struct CLIDictItem {
-	char*  name;
-	char*  description;
-	void (*function)(char*);
+	const char*  name;
+	const char*  description;
+	const void (*function)(char*);
 } CLIDictItem;
 
 
@@ -59,6 +91,13 @@ CLIDictItem *CLIDict     [CLIMaxDictionaries];
 char*        CLIDictNames[CLIMaxDictionaries];
 uint8_t      CLIDictionariesUsed;
 
+// History
+char CLIHistoryBuffer[CLIMaxHistorySize][CLILineBufferMaxSize];
+uint8_t CLIHistoryHead;
+uint8_t CLIHistoryTail;
+int8_t CLIHistoryCurrent;
+
+// Debug
 uint8_t CLILEDState;
 uint8_t CLIHexDebugMode;
 
@@ -66,17 +105,21 @@ uint8_t CLIHexDebugMode;
 
 // ----- Functions and Corresponding Function Aliases -----
 
-void init_cli();
-void process_cli();
-void registerDictionary_cli( CLIDictItem *cmdDict, char* dictName );
-void argumentIsolation_cli( char* string, char** first, char** second );
+void CLI_init();
+void CLI_process();
+void CLI_registerDictionary( const CLIDictItem *cmdDict, const char* dictName );
+void CLI_argumentIsolation( char* string, char** first, char** second );
 
-void commandLookup_cli();
-void tabCompletion_cli();
+int CLI_wrap( int x, int low, int high );
+void CLI_commandLookup();
+void CLI_tabCompletion();
+void CLI_saveHistory( char *buff );
+void CLI_retreiveHistory( int index );
 
 // CLI Command Functions
 void cliFunc_arch    ( char* args );
 void cliFunc_chip    ( char* args );
+void cliFunc_clear   ( char* args );
 void cliFunc_cliDebug( char* args );
 void cliFunc_device  ( char* args );
 void cliFunc_help    ( char* args );
@@ -85,7 +128,4 @@ void cliFunc_reload  ( char* args );
 void cliFunc_reset   ( char* args );
 void cliFunc_restart ( char* args );
 void cliFunc_version ( char* args );
-
-
-#endif
 

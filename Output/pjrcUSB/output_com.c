@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2014 by Jacob Alexander
+/* Copyright (C) 2011-2015 by Jacob Alexander
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,12 +24,15 @@
 // Compiler Includes
 #include <Lib/OutputLib.h>
 
+// Project Includes
+#include <cli.h>
+#include <led.h>
+#include <print.h>
+
 // USB Includes
-#if defined(_at90usb162_) || defined(_atmega32u4_) || defined(_at90usb646_) || defined(_at90usb1286_)
-#include "avr/usb_keyboard_debug.h"
-#elif defined(_mk20dx128_) || defined(_mk20dx256_)
-#include "arm/usb_keyboard.h"
+#if defined(_mk20dx128_) || defined(_mk20dx128vlf5_) || defined(_mk20dx256_) || defined(_mk20dx256vlh7_)
 #include "arm/usb_dev.h"
+#include "arm/usb_serial.h"
 #endif
 
 // Local Includes
@@ -37,59 +40,101 @@
 
 
 
+// ----- Macros -----
+
+
+
+// ----- Function Declarations -----
+
+
+
 // ----- Variables -----
 
-// which modifier keys are currently pressed
-// 1=left ctrl,    2=left shift,   4=left alt,    8=left gui
-// 16=right ctrl, 32=right shift, 64=right alt, 128=right gui
-         uint8_t USBKeys_Modifiers = 0;
+// Indicates whether the Output module is fully functional
+// 0 - Not fully functional, 1 - Fully functional
+// 0 is often used to show that a USB cable is not plugged in (but has power)
+volatile uint8_t  Output_Available = 0;
 
-// which keys are currently pressed, up to 6 keys may be down at once
-         uint8_t USBKeys_Array[USB_MAX_KEY_SEND] = {0,0,0,0,0,0};
 
-// The number of keys sent to the usb in the array
-         uint8_t USBKeys_Sent;
 
-// 1=num lock, 2=caps lock, 4=scroll lock, 8=compose, 16=kana
-volatile uint8_t USBKeys_LEDs = 0;
+// ----- Capabilities -----
 
-// protocol setting from the host.  We use exactly the same report
-// either way, so this variable only stores the setting since we
-// are required to be able to report which setting is in use.
-         uint8_t USBKeys_Protocol = 1;
+void Output_flashMode_capability( uint8_t state, uint8_t stateType, uint8_t *args )
+{
+	// Display capability name
+	if ( stateType == 0xFF && state == 0xFF )
+	{
+		print("Output_flashMode(usbCode)");
+		return;
+	}
 
-// the idle configuration, how often we send the report to the
-// host (ms * 4) even when it hasn't changed
-         uint8_t USBKeys_Idle_Config = 125;
-
-// count until idle timeout
-         uint8_t USBKeys_Idle_Count = 0;
+	// Start flash mode
+	Output_firmwareReload();
+}
 
 
 
 // ----- Functions -----
 
 // USB Module Setup
-inline void output_setup()
+inline void Output_setup()
 {
-	// Initialize the USB, and then wait for the host to set configuration.
-	// If the Teensy is powered without a PC connected to the USB port,
-	// this will wait forever.
+	// Initialize the USB
+	// If a USB connection does not exist, just ignore it
+	// All usb related functions will non-fatally fail if called
+	// If the USB initialization is delayed, then functionality will just be delayed
 	usb_init();
-	while ( !usb_configured() ) /* wait */ ;
-
-	// Wait an extra second for the PC's operating system to load drivers
-	// and do whatever it does to actually be ready for input
-	//_delay_ms(1000); // TODO
 }
 
 
 // Sets the device into firmware reload mode
-inline void output_firmwareReload()
+inline void Output_firmwareReload()
 {
-#if defined(_at90usb162_) || defined(_atmega32u4_) || defined(_at90usb646_) || defined(_at90usb1286_)
-#elif defined(_mk20dx128_) || defined(_mk20dx256_)
 	usb_device_reload();
+}
+
+
+// USB Input buffer available
+inline unsigned int Output_availablechar()
+{
+	return usb_serial_available();
+}
+
+
+// USB Get Character from input buffer
+inline int Output_getchar()
+{
+	// XXX Make sure to check output_availablechar() first! Information is lost with the cast (error codes) (AVR)
+	return (int)usb_serial_getchar();
+}
+
+
+// USB Send Character to output buffer
+inline int Output_putchar( char c )
+{
+	return usb_serial_putchar( c );
+}
+
+
+// USB Send String to output buffer, null terminated
+inline int Output_putstr( char* str )
+{
+#if defined(_at90usb162_) || defined(_atmega32u4_) || defined(_at90usb646_) || defined(_at90usb1286_) // AVR
+	uint16_t count = 0;
+#elif defined(_mk20dx128_) || defined(_mk20dx128vlf5_) || defined(_mk20dx256_) || defined(_mk20dx256vlh7_) // ARM
+	uint32_t count = 0;
 #endif
+	// Count characters until NULL character, then send the amount counted
+	while ( str[count] != '\0' )
+		count++;
+
+	return usb_serial_write( str, count );
+}
+
+
+// Soft Chip Reset
+inline void Output_softReset()
+{
+	usb_device_software_reset();
 }
 

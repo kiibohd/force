@@ -1,6 +1,6 @@
 ###| CMAKE Kiibohd Controller |###
 #
-# Jacob Alexander 2011-2013
+# Jacob Alexander 2011-2014
 # Due to this file's usefulness:
 #
 # Released into the Public Domain
@@ -15,13 +15,7 @@
 include( CMakeForceCompiler )
 cmake_force_c_compiler  ( avr-gcc AVRCCompiler )
 cmake_force_cxx_compiler( avr-g++ AVRCxxCompiler )
-
-
-#| Compiler Binaries
-set( OBJCOPY "avr-objcopy" )
-set( OBJDUMP "avr-objdump" )
-set( NM      "avr-nm"      )
-set( SIZE    "avr-size"    )
+set( _CMAKE_TOOLCHAIN_PREFIX avr- )
 
 
 
@@ -30,18 +24,43 @@ set( SIZE    "avr-size"    )
 #
 
 #| MCU Name
-#| You _MUST_ set this to match the board you are using
-#| type "make clean" after changing this, so all files will be rebuilt
 #|
 #| "at90usb162"       # Teensy   1.0
 #| "atmega32u4"       # Teensy   2.0
 #| "at90usb646"       # Teensy++ 1.0
 #| "at90usb1286"      # Teensy++ 2.0
-#set( MCU "atmega32u4" )
-set( MCU "at90usb1286" )
+
+set( MCU "${CHIP}" )
 
 message( STATUS "MCU Selected:" )
 message( "${MCU}" )
+
+
+#| Chip Size Database
+#| Teensy 1.0
+if ( "${CHIP}" MATCHES "at90usb162" )
+	set( SIZE_RAM      512 )
+	set( SIZE_FLASH  15872 )
+
+#| Teensy 2.0
+elseif ( "${CHIP}" MATCHES "atmega32u4" )
+	set( SIZE_RAM     2560 )
+	set( SIZE_FLASH  32256 )
+
+#| Teensy++ 1.0
+elseif ( "${CHIP}" MATCHES "at90usb646" )
+	set( SIZE_RAM     4096 )
+	set( SIZE_FLASH  64512 )
+
+#| Teensy++ 2.0
+elseif ( "${CHIP}" MATCHES "at90usb1286" )
+	set( SIZE_RAM     8192 )
+	set( SIZE_FLASH 130048 )
+
+#| Unknown AVR
+else ()
+	message( AUTHOR_WARNING "CHIP: ${CHIP} - Unknown AVR microcontroller" )
+endif ()
 
 
 #| Extra Compiler Sources
@@ -51,9 +70,26 @@ set( COMPILER_SRCS
 )
 
 
+#| CPU Type
+#| This is only informational for AVR microcontrollers
+#| The field can be determined by the microcontroller chip, but currently only one CPU type is used atm
+set( CPU "megaAVR" )
+
+message( STATUS "CPU Selected:" )
+message( "${CPU}" )
+
+
 #| USB Defines
-set( VENDOR_ID  "0x16C0" )
-set( PRODUCT_ID "0x047D" )
+set( VENDOR_ID       "0x1C11" )
+set( PRODUCT_ID      "0xB04D" )
+set( BOOT_VENDOR_ID  "0x16C0" ) # TODO Double check, this is likely incorrect
+set( BOOT_PRODUCT_ID "0x047D" )
+
+
+#| Only Teensy based AVRs supported
+set ( TEENSY 1 )
+message( STATUS "Bootloader Type:" )
+message( "Teensy" )
 
 
 #| Compiler flag to set the C Standard level.
@@ -66,7 +102,7 @@ set( CSTANDARD "-std=gnu99" )
 
 #| Warning Options
 #|  -Wall...:     warning level
-set( WARN "-Wall -Wstrict-prototypes" )
+set( WARN "-Wall" )
 
 
 #| Tuning Options
@@ -75,7 +111,7 @@ set( WARN "-Wall -Wstrict-prototypes" )
 set( TUNING "-funsigned-char -funsigned-bitfields -ffunction-sections -fpack-struct -fshort-enums" )
 
 
-#| Optimization level, can be [0, 1, 2, 3, s]. 
+#| Optimization level, can be [0, 1, 2, 3, s].
 #|     0 = turn off optimization. s = optimize for size.
 #|     (Note: 3 is not always the best optimization level. See avr-libc FAQ.)
 set( OPT "s" )
@@ -104,7 +140,7 @@ add_definitions( "-mmcu=${MCU} -DF_CPU=${F_CPU} -D_${MCU}_=1 -O${OPT} ${TUNING} 
 
 
 #| Linker Flags
-set( LINKER_FLAGS "-mmcu=${MCU} -Wl,-Map=${TARGET}.map,--cref -Wl,--relax -Wl,--gc-sections" )
+set( LINKER_FLAGS "-mmcu=${MCU} -Wl,-Map=link.map,--cref -Wl,--relax -Wl,--gc-sections" )
 
 
 #| Hex Flags (XXX, CMake seems to have issues if you quote the arguments for the custom commands...)

@@ -1,42 +1,83 @@
 ###| CMAKE Kiibohd Controller |###
 #
-# Jacob Alexander 2011-2014
+# Jacob Alexander 2011-2015
 # Due to this file's usefulness:
 #
 # Released into the Public Domain
 #
 ###
 
-#| Windows / Cygwin Compatibility options
-set( CMAKE_LEGACY_CYGWIN_WIN32 0 )
-set( CMAKE_USE_RELATIVE_PATHS  1 )
 
-#| Add Dependency Macro
-include( AddFileDependencies )
+
+###
+# Chip Selection
+#
+
+#| You _MUST_ set this to match the microcontroller you are trying to compile for
+#| You _MUST_ clean the build directory if you change this value
+#|
+set( CHIP
+#       "at90usb162"       # Teensy   1.0 (avr)
+#       "atmega32u4"       # Teensy   2.0 (avr)
+#       "at90usb646"       # Teensy++ 1.0 (avr)
+#       "at90usb1286"      # Teensy++ 2.0 (avr)
+#       "mk20dx128"        # Teensy   3.0 (arm)
+#	"mk20dx128vlf5"    # McHCK       mk20dx128vlf5
+        "mk20dx256"        # Teensy   3.1 (arm)
+#       "mk20dx256vlh7"    # Kiibohd-dfu mk20dx256vlh7
+	CACHE STRING "Microcontroller Chip" )
 
 
 
 ###
-# Compiler Family
+# Compiler Selection
 #
 
-#| Specify the compiler family to use
-#| Currently only supports AVR and ARM
-#| "avr"       # Teensy   1.0
-#| "avr"       # Teensy   2.0
-#| "avr"       # Teensy++ 1.0
-#| "avr"       # Teensy++ 2.0
-#| "arm"       # Teensy   3.0
-set( COMPILER_FAMILY "arm" )
-#set( COMPILER_FAMILY "avr" )
-
-message( STATUS "Compiler Family:" )
-message( "${COMPILER_FAMILY}" )
+#| *** EXPERIMENTAL ***
+#| Stick with gcc unless you know what you're doing
+#| Currently only arm is supported with clang
+set( COMPILER
+	"gcc"   # arm-none-eabi-gcc / avr-gcc - Default
+#       "clang" # arm-none-eabi
+	CACHE STRING "Compiler Type" )
 
 
 
-#| Load the compiler family specific configurations
-include( ${COMPILER_FAMILY}.cmake )
+###
+# Compiler Intialization
+#
+set ( CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/Lib/CMake )
+include( initialize )
+
+
+
+###
+# Project Modules
+#
+
+#| Note: This is the only section you probably want to modify
+#| Each module is defined by it's own folder (e.g. Scan/Matrix represents the "Matrix" module)
+#| All of the modules must be specified, as they generate the sources list of files to compile
+#| Any modifications to this file will cause a complete rebuild of the project
+
+#| Please look at the {Output,Debug} for information on the modules and how to create new ones
+
+##| Sends the current list of usb key codes through USB HID
+set( OutputModule "pjrcUSB"
+	CACHE STRING "Output Module" )
+
+##| Debugging source to use, each module has it's own set of defines that it sets
+set(  DebugModule "full"
+	CACHE STRING "Debug Module" )
+
+
+
+###
+# Source Defines (in addition to the selected Modules)
+#
+set( MAIN_SRCS
+	main.c
+)
 
 
 
@@ -56,102 +97,8 @@ cmake_minimum_required( VERSION 2.8 )
 
 
 ###
-# Source Defines
+# Module Initialization / Compilation / Targets
 #
-
-#| Sources (see setup.h for configuring in/away code blocks or other complete modules)
-#| XXX Not set here in this project, see setup.cmake
-#set( SRCS ./main.c )
-
-#| Instead, include the module source selector
-include( setup.cmake )
-set( SRCS
-	main.c
-	${COMPILER_SRCS}
-	${OUTPUT_SRCS}
-	${DEBUG_SRCS}
-)
-
-#| Directories to include by default
-include_directories( ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} )
-
-
-
-###
-# Module Compatibility Check
-#
-
-#| Check for whether the set modules are compatible with the specified compiler family
-ModuleCompatibility( ${OutputModulePath} ${OutputModuleCompatibility}   )
-ModuleCompatibility( ${DebugModulePath}  ${DebugModuleCompatibility} )
-
-
-
-###
-# Build Targets
-#
-
-#| Create the .ELF file
-set( TARGET_ELF ${TARGET}.elf )
-add_executable( ${TARGET_ELF} ${SRCS} )
-
-
-#| .ELF Properties
-set_target_properties( ${TARGET_ELF} PROPERTIES
-	LINK_FLAGS ${LINKER_FLAGS}
-	SUFFIX ""                               # XXX Force Windows to keep the .exe off
-)
-
-
-#| Convert the .ELF into a .HEX to load onto the Teensy
-set( TARGET_HEX ${TARGET}.hex )
-add_custom_command( TARGET ${TARGET_ELF} POST_BUILD
-	COMMAND ${OBJCOPY} ${HEX_FLAGS} ${TARGET_ELF} ${TARGET_HEX}
-	COMMENT "Creating load file for Flash:  ${TARGET_HEX}"
-)
-
-
-#| Generate the Extended .LSS
-set( TARGET_LSS ${TARGET}.lss )
-add_custom_command( TARGET ${TARGET_ELF} POST_BUILD
-	COMMAND ${OBJDUMP} ${LSS_FLAGS} ${TARGET_ELF} > ${TARGET_LSS}
-	COMMENT "Creating Extended Listing:     ${TARGET_LSS}"
-)
-
-
-#| Generate the Symbol Table .SYM
-set( TARGET_SYM ${TARGET}.sym )
-add_custom_command( TARGET ${TARGET_ELF} POST_BUILD
-	COMMAND ${NM} -n ${TARGET_ELF} > ${TARGET_SYM}
-	COMMENT "Creating Symbol Table:         ${TARGET_SYM}"
-)
-
-
-
-###
-# Size Information
-#
-
-#| After Changes Size Information
-add_custom_target( SizeAfter ALL ${SIZE} --target=${FORMAT} ${TARGET_HEX} ${TARGET_ELF}
-	DEPENDS ${TARGET_ELF}
-	COMMENT "Size after generation:"
-)
-
-
-
-###
-# Setup Loader Script
-#
-
-#| Provides the user with the correct teensy-loader-cli command for the built .HEX file
-#| teensy-loader-cli must be in the user's path
-if( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" OR ${CMAKE_SYSTEM_NAME} MATCHES "Darwin" )
-	configure_file( LoadFile/bash load )
-endif()
-
-#| TODO Windows
-if( ${CMAKE_SYSTEM_NAME} MATCHES "Windows" )
-	configure_file( LoadFile/bash load )
-endif()
+include( modules )
+include( build )
 

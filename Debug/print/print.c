@@ -31,24 +31,8 @@
 
 // ----- Functions -----
 
-// USB HID String Output
-void usb_debug_putstr( char* s )
-{
-#if defined(_at90usb162_) || defined(_atmega32u4_) || defined(_at90usb646_) || defined(_at90usb1286_) // AVR
-	while ( *s != '\0' )
-		usb_debug_putchar( *s++ );
-#elif defined(_mk20dx128_) || defined(_mk20dx256_) // ARM
-	// Count characters until NULL character, then send the amount counted
-	uint32_t count = 0;
-	while ( s[count] != '\0' )
-		count++;
-
-	usb_serial_write( s, count );
-#endif
-}
-
 // Multiple string Output
-void usb_debug_putstrs( char* first, ... )
+void printstrs( char* first, ... )
 {
 	// Initialize the variadic function parameter list
 	va_list ap;
@@ -61,7 +45,7 @@ void usb_debug_putstrs( char* first, ... )
 	while ( !( cur[0] == '\0' && cur[1] == '\0' && cur[2] == '\0' ) )
 	{
 		// Print out the given string
-		usb_debug_putstr( cur );
+		Output_putstr( cur );
 
 		// Get the next argument ready
 		cur = va_arg( ap, char* );
@@ -71,21 +55,17 @@ void usb_debug_putstrs( char* first, ... )
 }
 
 // Print a constant string
-void _print(const char *s)
+void _print( const char* s )
 {
 #if defined(_at90usb162_) || defined(_atmega32u4_) || defined(_at90usb646_) || defined(_at90usb1286_) // AVR
+	// Pull string out of flash
 	char c;
-
-	// Acquire the character from flash, and print it, as long as it's not NULL
-	// Also, if a newline is found, print a carrige return as well
-	while ( ( c = pgm_read_byte(s++) ) != '\0' )
+	while ( ( c = pgm_read_byte( s++ ) ) != '\0' )
 	{
-		if ( c == '\n' )
-			usb_debug_putchar('\r');
-		usb_debug_putchar(c);
+		Output_putchar( c );
 	}
-#elif defined(_mk20dx128_) || defined(_mk20dx256_) // ARM
-	usb_debug_putstr( (char*)s );
+#elif defined(_mk20dx128_) || defined(_mk20dx128vlf5_) || defined(_mk20dx256_) || defined(_mk20dx256vlh7_) // ARM
+	Output_putstr( (char*)s );
 #endif
 }
 
@@ -137,6 +117,20 @@ void printHex_op( uint16_t in, uint8_t op )
 
 	// Convert number
 	hexToStr_op( in, tmpStr, op );
+
+	// Print number
+	dPrintStr( tmpStr );
+}
+
+void printHex32_op( uint32_t in, uint8_t op )
+{
+	// With an op of 1, the max number of characters is 6 + 1 for null
+	// e.g. "0xFFFF\0"
+	// op 2 and 4 require fewer characters (2+1 and 4+1 respectively)
+	char tmpStr[7];
+
+	// Convert number
+	hex32ToStr_op( in, tmpStr, op );
 
 	// Print number
 	dPrintStr( tmpStr );
@@ -243,6 +237,41 @@ void hexToStr_op( uint16_t in, char* out, uint8_t op )
 }
 
 
+void hex32ToStr_op( uint32_t in, char* out, uint8_t op )
+{
+	// Position container
+	uint32_t pos = 0;
+
+	// Evaluate through digits as hex
+	do
+	{
+		uint32_t cur = in % 16;
+		out[pos++] = cur + (( cur < 10 ) ? '0' : 'A' - 10);
+	}
+	while ( (in /= 16) > 0 );
+
+	// Output formatting options
+	switch ( op )
+	{
+	case 1: // Add 0x
+		out[pos++] = 'x';
+		out[pos++] = '0';
+		break;
+	case 2: //  8-bit padding
+	case 4: // 16-bit padding
+		while ( pos < op )
+			out[pos++] = '0';
+		break;
+	}
+
+	// Append null
+	out[pos] = '\0';
+
+	// Reverse the string to the correct order
+	revsStr(out);
+}
+
+
 void revsStr( char* in )
 {
 	// Iterators
@@ -284,7 +313,7 @@ int16_t eqStr( char* str1, char* str2 )
 	return *--str1 == *--str2 ? -1 : *++str1;
 }
 
-int decToInt( char* in )
+int numToInt( char* in )
 {
 	// Pointers to the LSD (Least Significant Digit) and MSD
 	char* lsd = in;
@@ -292,6 +321,7 @@ int decToInt( char* in )
 
 	int total = 0;
 	int sign = 1; // Default to positive
+	uint8_t base = 10; // Use base 10 by default TODO Add support for bases other than 10 and 16
 
 	// Scan the string once to determine the length
 	while ( *lsd != '\0' )
@@ -306,12 +336,32 @@ int decToInt( char* in )
 		case ' ':
 			msd = lsd;
 			break;
+		case 'x': // Hex Mode
+			base = 0x10;
+			msd = lsd;
+			break;
 		}
 	}
 
-	// Rescan the string from the LSD to MSD to convert it to a decimal number
-	for ( unsigned int digit = 1; lsd > msd ; digit *= 10 )
-		total += ( (*--lsd) - '0' ) * digit;
+	// Process string depending on which base
+	switch ( base )
+	{
+	case 10: // Decimal
+		// Rescan the string from the LSD to MSD to convert it to a decimal number
+		for ( unsigned int digit = 1; lsd > msd ; digit *= 10 )
+			total += ( (*--lsd) - '0' ) * digit;
+		break;
+
+	case 0x10: // Hex
+		// Rescan the string from the LSD to MSD to convert it to a hexadecimal number
+		for ( unsigned int digit = 1; lsd > msd ; digit *= 0x10 )
+		{
+			if    ( *--lsd <= '9' ) total += ( *lsd - '0' ) * digit;
+			else if ( *lsd <= 'F' ) total += ( *lsd - 'A' + 10 ) * digit;
+			else if ( *lsd <= 'f' ) total += ( *lsd - 'a' + 10 ) * digit;
+		}
+		break;
+	}
 
 	// Propagate sign and return
 	return total * sign;

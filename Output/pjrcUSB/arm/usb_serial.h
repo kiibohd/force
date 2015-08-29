@@ -1,6 +1,7 @@
 /* Teensyduino Core Library
  * http://www.pjrc.com/teensy/
  * Copyright (c) 2013 PJRC.COM, LLC.
+ * Modifications by Jacob Alexander (2013-2015)
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -10,10 +11,10 @@
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
  *
- * 1. The above copyright notice and this permission notice shall be 
+ * 1. The above copyright notice and this permission notice shall be
  * included in all copies or substantial portions of the Software.
  *
- * 2. If the Software is incorporated into a build system that allows 
+ * 2. If the Software is incorporated into a build system that allows
  * selection among a list of target devices, then similar target
  * devices manufactured by PJRC.COM must be included in the list of
  * target devices and selectable in the same manner.
@@ -28,32 +29,46 @@
  * SOFTWARE.
  */
 
-#ifndef USBserial_h_
-#define USBserial_h_
+#pragma once
 
+// ----- Includes -----
+
+// Compiler Includes
 #include <inttypes.h>
+
+
+
+// ----- Defines -----
 
 // Compatibility defines from AVR
 #define PROGMEM
 #define PGM_P  const char *
 #define PSTR(str) (str)
 
+#define USB_SERIAL_DTR  0x01
+#define USB_SERIAL_RTS  0x02
 
-int usb_serial_getchar(void);
-int usb_serial_peekchar(void);
-int usb_serial_available(void);
-int usb_serial_read(void *buffer, uint32_t size);
-void usb_serial_flush_input(void);
-int usb_serial_putchar(uint8_t c);
-int usb_serial_write(const void *buffer, uint32_t size);
-void usb_serial_flush_output(void);
-extern uint32_t usb_cdc_line_coding[2];
+
+
+// ----- Variables -----
+
+extern volatile uint8_t usb_cdc_line_coding[7];
+
 extern volatile uint8_t usb_cdc_line_rtsdtr;
 extern volatile uint8_t usb_cdc_transmit_flush_timer;
 extern volatile uint8_t usb_configuration;
 
-#define USB_SERIAL_DTR  0x01
-#define USB_SERIAL_RTS  0x02
 
-#endif // USBserial_h_
+
+// ----- Functions -----
+
+int usb_serial_available();
+int usb_serial_getchar();
+int usb_serial_peekchar();
+int usb_serial_putchar( uint8_t c );
+int usb_serial_read( void *buffer, uint32_t size );
+int usb_serial_write( const void *buffer, uint32_t size );
+
+void usb_serial_flush_input();
+void usb_serial_flush_output();
 

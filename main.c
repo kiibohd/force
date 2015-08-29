@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2014 by Jacob Alexander
+/* Copyright (C) 2011-2015 by Jacob Alexander
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -66,6 +66,7 @@ void continuityTest();
 
 // ----- Variables -----
 
+#if 0
 // Force Gauge command dictionary
 char*       forceGaugeCLIDictName = "Force Curve Gauge Commands";
 CLIDictItem forceGaugeCLIDict[] = {
@@ -221,11 +222,13 @@ inline void forceSetup()
 	// Initialization of force gauge variables
 	force_freeRunning = 0;
 }
+#endif
 
 
 // Main execution function
 int main()
 {
+#if 0
 	// Setup force gauge
 	forceSetup();
 
@@ -316,9 +319,10 @@ int main()
 			lastDistance = 0;
 		}
 	}
+#endif
 }
 
-
+#if 0
 // Send each character from the string (except the NULL), waiting until each character is sent before proceeding
 // NOTE: There is no delay after sending the last character
 //       If first character is NULL, it will be sent
@@ -661,4 +665,6 @@ void cliFunc_zeroPosition( char* args )
 	info_msg("New distance offset: ");
 	printInt32( distanceOffset );
 }
+
+#endif
 

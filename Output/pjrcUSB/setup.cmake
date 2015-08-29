@@ -1,6 +1,6 @@
 ###| CMake Kiibohd Controller USB Module |###
 #
-# Written by Jacob Alexander in 2011-2013 for the Kiibohd Controller
+# Written by Jacob Alexander in 2011-2015 for the Kiibohd Controller
 #
 # Released into the Public Domain
 #
@@ -11,39 +11,24 @@
 # Module C files
 #
 
-
-#| AVR Compiler
-if ( ${COMPILER_FAMILY} MATCHES "avr" )
-
-	set( OUTPUT_SRCS
-		output_com.c
-		avr/usb_keyboard_debug.c
-	)
-
 #| ARM Compiler
-elseif ( ${COMPILER_FAMILY} MATCHES "arm" )
+if ( ${COMPILER_FAMILY} MATCHES "arm" )
 
-	set( OUTPUT_SRCS
+	set ( Module_SRCS
 		output_com.c
 		arm/usb_desc.c
 		arm/usb_dev.c
-		arm/usb_keyboard.c
 		arm/usb_mem.c
 		arm/usb_serial.c
 	)
 
-endif ( ${COMPILER_FAMILY} MATCHES "avr" )
+endif ()
 
-
-###
-# Module Specific Options
-#
 
 ###
 # Compiler Family Compatibility
 #
-set( OutputModuleCompatibility
+set( ModuleCompatibility
 	arm
-	avr
 )
 

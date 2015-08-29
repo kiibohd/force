@@ -1,4 +1,4 @@
-/* Copyright (C) 2014 by Jacob Alexander
+/* Copyright (C) 2014-2015 by Jacob Alexander
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -35,15 +35,24 @@
 // ----- Variables -----
 
 // Basic command dictionary
-char*       basicCLIDictName = "General Commands";
-CLIDictItem basicCLIDict[] = {
-	{ "cliDebug", "Enables/Disables hex output of the most recent cli input.", cliFunc_cliDebug },
-	{ "help",     "You're looking at it :P", cliFunc_help },
-	{ "led",      "Enables/Disables indicator LED. Try a couple times just in case the LED is in an odd state.\r\n\t\t\033[33mWarning\033[0m: May adversely affect some modules...", cliFunc_led },
-	{ "reload",   "Signals microcontroller to reflash/reload.", cliFunc_reload },
-	{ "reset",    "Resets the terminal back to initial settings.", cliFunc_reset },
-	{ "restart",  "Sends a software restart, should be similar to powering on the device.", cliFunc_restart },
-	{ "version",  "Version information about this firmware.", cliFunc_version },
+CLIDict_Entry( clear, "Clear the screen.");
+CLIDict_Entry( cliDebug, "Enables/Disables hex output of the most recent cli input." );
+CLIDict_Entry( help,     "You're looking at it :P" );
+CLIDict_Entry( led,      "Enables/Disables indicator LED. Try a couple times just in case the LED is in an odd state.\r\n\t\t\033[33mWarning\033[0m: May adversely affect some modules..." );
+CLIDict_Entry( reload,   "Signals microcontroller to reflash/reload." );
+CLIDict_Entry( reset,    "Resets the terminal back to initial settings." );
+CLIDict_Entry( restart,  "Sends a software restart, should be similar to powering on the device." );
+CLIDict_Entry( version,  "Version information about this firmware." );
+
+CLIDict_Def( basicCLIDict, "General Commands" ) = {
+	CLIDict_Item( clear ),
+	CLIDict_Item( cliDebug ),
+	CLIDict_Item( help ),
+	CLIDict_Item( led ),
+	CLIDict_Item( reload ),
+	CLIDict_Item( reset ),
+	CLIDict_Item( restart ),
+	CLIDict_Item( version ),
 	{ 0, 0, 0 } // Null entry for dictionary end
 };
 
@@ -58,17 +67,22 @@ inline void prompt()
 }
 
 // Initialize the CLI
-inline void init_cli()
+inline void CLI_init()
 {
 	// Reset the Line Buffer
 	CLILineBufferCurrent = 0;
+
+	// History starts empty
+	CLIHistoryHead = 0;
+	CLIHistoryCurrent = 0;
+	CLIHistoryTail = 0;
 
 	// Set prompt
 	prompt();
 
 	// Register first dictionary
 	CLIDictionariesUsed = 0;
-	registerDictionary_cli( basicCLIDict, basicCLIDictName );
+	CLI_registerDictionary( basicCLIDict, basicCLIDictName );
 
 	// Initialize main LED
 	init_errorLED();
@@ -79,21 +93,20 @@ inline void init_cli()
 }
 
 // Query the serial input buffer for any new characters
-void process_cli()
+void CLI_process()
 {
 	// Current buffer position
 	uint8_t prev_buf_pos = CLILineBufferCurrent;
 
 	// Process each character while available
-	int result = 0;
 	while ( 1 )
 	{
 		// No more characters to process
-		result = usb_serial_getchar(); // Retrieve from serial module // TODO Make USB agnostic
-		if ( result == -1 )
+		if ( Output_availablechar() == 0 )
 			break;
 
-		char cur_char = (char)result;
+		// Retrieve from output module
+		char cur_char = (char)Output_getchar();
 
 		// Make sure buffer isn't full
 		if ( CLILineBufferCurrent >= CLILineBufferMaxSize )
@@ -136,15 +149,41 @@ void process_cli()
 		// Check for control characters
 		switch ( CLILineBuffer[prev_buf_pos] )
 		{
-		case 0x0D: // Enter
+		// Enter
+		case 0x0A: // LF
+		case 0x0D: // CR
 			CLILineBuffer[CLILineBufferCurrent - 1] = ' '; // Replace Enter with a space (resolves a bug in args)
 
 			// Remove the space if there is no command
 			if ( CLILineBufferCurrent == 1 )
+			{
 				CLILineBufferCurrent--;
+			}
+			else
+			{
+			// Only do command-related stuff if there was actually a command
+			// Avoids clogging command history with blanks
 
-			// Process the current line buffer
-			commandLookup_cli();
+				// Process the current line buffer
+				CLI_commandLookup();
+
+				// Add the command to the history
+				CLI_saveHistory( CLILineBuffer );
+
+				// Keep the array circular, discarding the older entries
+				if ( CLIHistoryTail < CLIHistoryHead )
+					CLIHistoryHead = ( CLIHistoryHead + 1 ) % CLIMaxHistorySize;
+				CLIHistoryTail++;
+				if ( CLIHistoryTail == CLIMaxHistorySize )
+				{
+					CLIHistoryTail = 0;
+					CLIHistoryHead = 1;
+				}
+
+				CLIHistoryCurrent = CLIHistoryTail; // 'Up' starts at the last item
+				CLI_saveHistory( NULL ); // delete the old temp buffer
+
+			}
 
 			// Reset the buffer
 			CLILineBufferCurrent = 0;
@@ -159,7 +198,7 @@ void process_cli()
 
 		case 0x09: // Tab
 			// Tab completion for the current command
-			tabCompletion_cli();
+			CLI_tabCompletion();
 
 			CLILineBufferCurrent--; // Remove the Tab
 
@@ -167,9 +206,38 @@ void process_cli()
 			//     Doesn't look like it will happen *that* often, so not handling it for now -HaaTa
 			return;
 
-		case 0x1B: // Esc
-			// Check for escape sequence
-			// TODO
+		case 0x1B: // Esc / Escape codes
+			// Check for other escape sequence
+
+			// \e[ is an escape code in vt100 compatible terminals
+			if ( CLILineBufferCurrent >= prev_buf_pos + 3
+				&& CLILineBuffer[ prev_buf_pos ] == 0x1B
+				&& CLILineBuffer[ prev_buf_pos + 1] == 0x5B )
+			{
+				// Arrow Keys: A (0x41) = Up, B (0x42) = Down, C (0x43) = Right, D (0x44) = Left
+
+				if ( CLILineBuffer[ prev_buf_pos + 2 ] == 0x41 ) // Hist prev
+				{
+					if ( CLIHistoryCurrent == CLIHistoryTail )
+					{
+						// Is first time pressing arrow. Save the current buffer
+						CLILineBuffer[ prev_buf_pos ] = '\0';
+						CLI_saveHistory( CLILineBuffer );
+					}
+
+					// Grab the previus item from the history if there is one
+					if ( RING_PREV( CLIHistoryCurrent ) != RING_PREV( CLIHistoryHead ) )
+						CLIHistoryCurrent = RING_PREV( CLIHistoryCurrent );
+					CLI_retreiveHistory( CLIHistoryCurrent );
+				}
+				if ( CLILineBuffer[ prev_buf_pos + 2 ] == 0x42 ) // Hist next
+				{
+					// Grab the next item from the history if it exists
+					if ( RING_NEXT( CLIHistoryCurrent ) != RING_NEXT( CLIHistoryTail ) )
+						CLIHistoryCurrent = RING_NEXT( CLIHistoryCurrent );
+					CLI_retreiveHistory( CLIHistoryCurrent );
+				}
+			}
 			return;
 
 		case 0x08:
@@ -208,7 +276,7 @@ void process_cli()
 //  One to the first non-space character
 //  The second to the next argument (first NULL if there isn't an argument). delimited by a space
 //  Places a NULL at the first space after the first argument
-inline void argumentIsolation_cli( char* string, char** first, char** second )
+void CLI_argumentIsolation( char* string, char** first, char** second )
 {
 	// Mark out the first argument
 	// This is done by finding the first space after a list of non-spaces and setting it NULL
@@ -229,7 +297,7 @@ inline void argumentIsolation_cli( char* string, char** first, char** second )
 }
 
 // Scans the CLILineBuffer for any valid commands
-void commandLookup_cli()
+void CLI_commandLookup()
 {
 	// Ignore command if buffer is 0 length
 	if ( CLILineBufferCurrent == 0 )
@@ -242,7 +310,7 @@ void commandLookup_cli()
 	// Places a NULL at the first space after the command
 	char* cmdPtr;
 	char* argPtr;
-	argumentIsolation_cli( CLILineBuffer, &cmdPtr, &argPtr );
+	CLI_argumentIsolation( CLILineBuffer, &cmdPtr, &argPtr );
 
 	// Scan array of dictionaries for a valid command match
 	for ( uint8_t dict = 0; dict < CLIDictionariesUsed; dict++ )
@@ -251,11 +319,11 @@ void commandLookup_cli()
 		for ( uint8_t cmd = 0; CLIDict[dict][cmd].name != 0; cmd++ )
 		{
 			// Compare the first argument and each command entry
-			if ( eqStr( cmdPtr, CLIDict[dict][cmd].name ) == -1 )
+			if ( eqStr( cmdPtr, (char*)CLIDict[dict][cmd].name ) == -1 )
 			{
 				// Run the specified command function pointer
 				//   argPtr is already pointing at the first character of the arguments
-				(*CLIDict[dict][cmd].function)( argPtr );
+				(*(void (*)(char*))CLIDict[dict][cmd].function)( argPtr );
 
 				return;
 			}
@@ -268,7 +336,7 @@ void commandLookup_cli()
 }
 
 // Registers a command dictionary with the CLI
-inline void registerDictionary_cli( CLIDictItem *cmdDict, char* dictName )
+void CLI_registerDictionary( const CLIDictItem *cmdDict, const char* dictName )
 {
 	// Make sure this max limit of dictionaries hasn't been reached
 	if ( CLIDictionariesUsed >= CLIMaxDictionaries )
@@ -278,11 +346,11 @@ inline void registerDictionary_cli( CLIDictItem *cmdDict, char* dictName )
 	}
 
 	// Add dictionary
-	CLIDictNames[CLIDictionariesUsed] = dictName;
-	CLIDict[CLIDictionariesUsed++] = cmdDict;
+	CLIDictNames[CLIDictionariesUsed] = (char*)dictName;
+	CLIDict[CLIDictionariesUsed++] = (CLIDictItem*)cmdDict;
 }
 
-inline void tabCompletion_cli()
+inline void CLI_tabCompletion()
 {
 	// Ignore command if buffer is 0 length
 	if ( CLILineBufferCurrent == 0 )
@@ -295,7 +363,7 @@ inline void tabCompletion_cli()
 	// Places a NULL at the first space after the command
 	char* cmdPtr;
 	char* argPtr;
-	argumentIsolation_cli( CLILineBuffer, &cmdPtr, &argPtr );
+	CLI_argumentIsolation( CLILineBuffer, &cmdPtr, &argPtr );
 
 	// Tab match pointer
 	char* tabMatch = 0;
@@ -311,11 +379,11 @@ inline void tabCompletion_cli()
 			// NOTE: To save on processing, we only care about the commands and ignore the arguments
 			//       If there are arguments, and a valid tab match is found, buffer is cleared (args lost)
 			//       Also ignores full matches
-			if ( eqStr( cmdPtr, CLIDict[dict][cmd].name ) == 0 )
+			if ( eqStr( cmdPtr, (char*)CLIDict[dict][cmd].name ) == 0 )
 			{
 				// TODO Make list of commands if multiple matches
 				matches++;
-				tabMatch = CLIDict[dict][cmd].name;
+				tabMatch = (char*)CLIDict[dict][cmd].name;
 			}
 		}
 	}
@@ -340,9 +408,62 @@ inline void tabCompletion_cli()
 	}
 }
 
+inline int CLI_wrap( int kX, int const kLowerBound, int const kUpperBound )
+{
+	int range_size = kUpperBound - kLowerBound + 1;
+
+	if ( kX < kLowerBound )
+		kX += range_size * ((kLowerBound - kX) / range_size + 1);
+
+	return kLowerBound + (kX - kLowerBound) % range_size;
+}
+
+inline void CLI_saveHistory( char *buff )
+{
+	if ( buff == NULL )
+	{
+		//clear the item
+		CLIHistoryBuffer[ CLIHistoryTail ][ 0 ] = '\0';
+		return;
+	}
+
+	// Copy the line to the history
+	int i;
+	for (i = 0; i < CLILineBufferCurrent; i++)
+	{
+		CLIHistoryBuffer[ CLIHistoryTail ][ i ] = CLILineBuffer[ i ];
+	}
+}
+
+void CLI_retreiveHistory( int index )
+{
+	char *histMatch = CLIHistoryBuffer[ index ];
+
+	// Reset the buffer
+	CLILineBufferCurrent = 0;
+
+	// Reprint the prompt (automatically clears the line)
+	prompt();
+
+	// Display the command
+	dPrint( histMatch );
+
+	// There are no index counts, so just copy the whole string to the input buffe
+	CLILineBufferCurrent = 0;
+	while ( *histMatch != '\0' )
+	{
+		CLILineBuffer[ CLILineBufferCurrent++ ] = *histMatch++;
+	}
+}
+
 
 
 // ----- CLI Command Functions -----
+
+void cliFunc_clear( char* args)
+{
+	print("\033[2J\033[H\r"); // Erases the whole screen
+}
 
 void cliFunc_cliDebug( char* args )
 {
@@ -368,7 +489,9 @@ void cliFunc_help( char* args )
 	for ( uint8_t dict = 0; dict < CLIDictionariesUsed; dict++ )
 	{
 		// Print the name of each dictionary as a title
-		dPrintStrsNL( NL, "\033[1;32m", CLIDictNames[dict], "\033[0m" );
+		print( NL "\033[1;32m" );
+		_print( CLIDictNames[dict] ); // This print is requride by AVR (flash)
+		print( "\033[0m" NL );
 
 		// Parse each cmd/description until a null command entry is found
 		for ( uint8_t cmd = 0; CLIDict[dict][cmd].name != 0; cmd++ )
@@ -376,11 +499,12 @@ void cliFunc_help( char* args )
 			dPrintStrs(" \033[35m", CLIDict[dict][cmd].name, "\033[0m");
 
 			// Determine number of spaces to tab by the length of the command and TabAlign
-			uint8_t padLength = CLIEntryTabAlign - lenStr( CLIDict[dict][cmd].name );
+			uint8_t padLength = CLIEntryTabAlign - lenStr( (char*)CLIDict[dict][cmd].name );
 			while ( padLength-- > 0 )
 				print(" ");
 
-			dPrintStrNL( CLIDict[dict][cmd].description );
+			_print( CLIDict[dict][cmd].description ); // This print is required by AVR (flash)
+			print( NL );
 		}
 	}
 }
@@ -394,7 +518,7 @@ void cliFunc_led( char* args )
 void cliFunc_reload( char* args )
 {
 	// Request to output module to be set into firmware reload mode
-	output_firmwareReload();
+	Output_firmwareReload();
 }
 
 void cliFunc_reset( char* args )
@@ -405,7 +529,7 @@ void cliFunc_reset( char* args )
 void cliFunc_restart( char* args )
 {
 	// Trigger an overall software reset
-	SOFTWARE_RESET();
+	Output_softReset();
 }
 
 void cliFunc_version( char* args )
@@ -413,7 +537,7 @@ void cliFunc_version( char* args )
 	print( NL );
 	print( " \033[1mRevision:\033[0m      " CLI_Revision       NL );
 	print( " \033[1mBranch:\033[0m        " CLI_Branch         NL );
-	print( " \033[1mTree Status:\033[0m   " CLI_ModifiedStatus NL );
+	print( " \033[1mTree Status:\033[0m   " CLI_ModifiedStatus CLI_ModifiedFiles NL );
 	print( " \033[1mRepo Origin:\033[0m   " CLI_RepoOrigin     NL );
 	print( " \033[1mCommit Date:\033[0m   " CLI_CommitDate     NL );
 	print( " \033[1mCommit Author:\033[0m " CLI_CommitAuthor   NL );
@@ -424,5 +548,15 @@ void cliFunc_version( char* args )
 	print( " \033[1mCPU:\033[0m           " CLI_CPU            NL );
 	print( " \033[1mDevice:\033[0m        " CLI_Device         NL );
 	print( " \033[1mModules:\033[0m       " CLI_Modules        NL );
+#if defined(_mk20dx128_) || defined(_mk20dx128vlf5_) || defined(_mk20dx256_) || defined(_mk20dx256vlh7_)
+	print( " \033[1mUnique Id:\033[0m     " );
+	printHex32_op( SIM_UIDH, 4 );
+	printHex32_op( SIM_UIDMH, 4 );
+	printHex32_op( SIM_UIDML, 4 );
+	printHex32_op( SIM_UIDL, 4 );
+#elif defined(_at90usb162_) || defined(_atmega32u4_) || defined(_at90usb646_) || defined(_at90usb1286_)
+#else
+#error "No unique id defined."
+#endif
 }
 
