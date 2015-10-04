@@ -32,6 +32,7 @@
 // USB Includes
 #if defined(_mk20dx128_) || defined(_mk20dx128vlf5_) || defined(_mk20dx256_) || defined(_mk20dx256vlh7_)
 #include "arm/usb_dev.h"
+#include "arm/usb_rawhid.h"
 #include "arm/usb_serial.h"
 #endif
 
@@ -129,6 +130,30 @@ inline int Output_putstr( char* str )
 		count++;
 
 	return usb_serial_write( str, count );
+}
+
+// USB Raw HID buffer available
+inline unsigned int Output_rawhid_availablechar()
+{
+	return usb_rawhid_available();
+}
+
+
+// USB Raw HID get buffer
+// XXX Must be a 64 byte buffer
+inline int Output_rawhid_getbuffer( char* buffer )
+{
+	// 1000 ms timeout
+	return usb_rawhid_recv( (void*)buffer, 1000 );
+}
+
+
+// USB Raw HID send buffer
+// XXX Must be a 64 byte buffer
+inline int Output_rawhid_sendbuffer( char* buffer )
+{
+	// 1000 ms timeout
+	return usb_rawhid_send( (void*)buffer, 1000 );
 }
 
 

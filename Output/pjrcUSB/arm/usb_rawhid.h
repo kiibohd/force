@@ -39,7 +39,8 @@
 
 // ----- Functions -----
 
+unsigned int usb_rawhid_available();
+
 int usb_rawhid_recv( void *buffer, uint32_t timeout );
-int usb_rawhid_available();
 int usb_rawhid_send( const void *buffer, uint32_t timeout );
 

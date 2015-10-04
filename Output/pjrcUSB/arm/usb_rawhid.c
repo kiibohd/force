@@ -73,7 +73,7 @@ int usb_rawhid_recv( void *buffer, uint32_t timeout )
 	return RAWHID_RX_SIZE;
 }
 
-int usb_rawhid_available()
+unsigned int usb_rawhid_available()
 {
 	uint32_t count;
 
@@ -88,7 +88,7 @@ int usb_rawhid_send( const void *buffer, uint32_t timeout )
 	usb_packet_t *tx_packet;
 	uint32_t begin = millis();
 
-	while (1)
+	while ( 1 )
 	{
 		if ( !usb_configuration )
 			return -1;

@@ -101,3 +101,10 @@ int Output_getchar();
 int Output_putchar( char c );
 int Output_putstr( char* str );
 
+// Relies on USB rawhid module
+// Buffers must be 64 bytes long
+unsigned int Output_rawhid_availablechar();
+
+int Output_rawhid_getbuffer( char* buffer );
+int Output_rawhid_sendbuffer( char* buffer );
+
