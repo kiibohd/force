@@ -1,7 +1,7 @@
 // Pin  Name      Function     Hardware
 // ----------------------------------
-//  0   PTB16                  RX0
-//  1   PTB17                  TX0
+//  0   PTB16                  RX0 SOUT1
+//  1   PTB17                  TX0 SIN1
 //  2   PTD0                   PCS0
 //  3   PTA12     FTM1_CH0     PWM (CAN TX - Teensy 3.1) I2S_TXD0
 //  4   PTA13     FTM1_CH1     PWM (CAN RX - Teensy 3.1) I2S_TX_FS
@@ -26,12 +26,12 @@
 // 23   PTC2      FTM0_CH1     PWM PCS2 I2S_TX_FS
 // 24   PTA5     (FTM0_CH2)    I2S_TX_BCLK
 // 25   PTB19                 (PWM - Teensy 3.1) I2S_TX_FS
-// 26   PTE1                   RX1 SCL1
+// 26   PTE1                   RX1 SCL1 SOUT1 SIN1
 // 27   PTC9                   I2S_RX_BCLK
 // 28   PTC8                   I2S_MCLK
 // 29   PTC10                 (SCL1 - Teensy 3.1) I2S_RX_FS
 // 30   PTC11                 (SDA1 - Teensy 3.1) I2S_RXD1
-// 31   PTE0                   TX1 SDA1
+// 31   PTE0                   TX1 SDA1 PCS1-1
 // 32   PTB18                 (PWM - Teensy 3.1) I2S_TX_BCLK
 // 33   PTA4    (FTM0_CH1)
 // 34          analog only

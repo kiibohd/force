@@ -1103,6 +1103,8 @@
 
 // Chapter 36: Periodic Interrupt Timer (PIT)
 #define PIT_MCR                 *(volatile uint32_t *)0x40037000 // PIT Module Control Register
+#define PIT_MCR_MDIS            0x02 // PIT Module disable
+#define PIT_MCR_FRZ             0x01 // PIT Module debug mode freeze
 #define PIT_LDVAL0              *(volatile uint32_t *)0x40037100 // Timer Load Value Register
 #define PIT_CVAL0               *(volatile uint32_t *)0x40037104 // Current Timer Value Register
 #define PIT_TCTRL0              *(volatile uint32_t *)0x40037108 // Timer Control Register
@@ -1119,6 +1121,10 @@
 #define PIT_CVAL3               *(volatile uint32_t *)0x40037134 // Current Timer Value Register
 #define PIT_TCTRL3              *(volatile uint32_t *)0x40037138 // Timer Control Register
 #define PIT_TFLG3               *(volatile uint32_t *)0x4003713C // Timer Flag Register
+#define PIT_TCTRL_CHN           0x04 // Chain mode, n-1 PIT Channel needs to expire before incrementing
+#define PIT_TCTRL_TIE           0x02 // Timer interrupt enable
+#define PIT_TCTRL_TEN           0x01 // Timer enable
+#define PIT_TFLG_TIF            0x01 // Clears interrupt
 
 // Chapter 37: Low-Power Timer (LPTMR)
 #define LPTMR0_CSR              *(volatile uint32_t *)0x40040000 // Low Power Timer Control Status Register

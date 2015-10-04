@@ -44,6 +44,10 @@
 
 // ----- Function Declarations -----
 
+void cliFunc_down        ( char* args );
+void cliFunc_stop        ( char* args );
+void cliFunc_up          ( char* args );
+
 void cliFunc_contRead    ( char* args );
 void cliFunc_distRead    ( char* args );
 void cliFunc_free        ( char* args );
@@ -65,6 +69,19 @@ void continuityTest();
 
 
 // ----- Variables -----
+
+// Force Gauge command dictionary
+CLIDict_Entry( up,    "Enable motor up signal" );
+CLIDict_Entry( down,  "Enable motor down signal" );
+CLIDict_Entry( stop,  "Stop motor movement" );
+
+CLIDict_Def( forceGaugeCLIDict, "Force Curve Gauge Commands" ) = {
+	CLIDict_Item( down ),
+	CLIDict_Item( stop ),
+	CLIDict_Item( up ),
+	{ 0, 0, 0 } // Null entry for dictionary end
+};
+
 
 #if 0
 // Force Gauge command dictionary
@@ -224,10 +241,216 @@ inline void forceSetup()
 }
 #endif
 
+// ------ Distance Measurement ------
+
+// PWM Input Interrupt
+volatile uint8_t distance_pulses_on = 0;
+void pit0_isr()
+{
+	//dbug_print("YUSH");
+	// If pulses are on, turn off
+	if ( distance_pulses_on )
+	{
+		// Disable FTM PWM
+		FTM0_C7SC = 0x00;
+	}
+	// Otherwise turn them on
+	else
+	{
+		// Set FTM to PWM output - Edge Aligned, High-true pulses
+		FTM0_C7SC = 0x28; // MSnB:MSnA = 10, ELSnB:ELSnA = 01
+	}
+
+	distance_pulses_on = !distance_pulses_on;
+
+	// Clear the interrupt
+	PIT_TFLG0 = PIT_TFLG_TIF;
+}
+
+inline void distance_setup()
+{
+	// Setup distance read parameters for iGaging Distance Scale
+	//       freq = 9kHz
+	// duty_cycle = 20%
+	// high_delay = (1/freq) *       (duty_cycle/100)
+	//  low_delay = (1/freq) * ((100-duty_cycle)/100)
+
+	// Setup PWM source
+	SIM_SCGC6 |= SIM_SCGC6_FTM0;
+
+	// Disable write protect and allow access to all the registers
+	FTM0_CNT = 0; // Reset counter
+
+	// Set FTM to PWM output - Edge Aligned, High-true pulses
+	FTM0_C7SC = 0x28; // MSnB:MSnA = 10, ELSnB:ELSnA = 01
+
+	// System clock, /w prescalar setting of 0
+	FTM0_SC = FTM_SC_CLKS(1) | FTM_SC_PS(0);
+
+	// PWM Period
+	// 48 MHz / 9 kHz = 5333.333 or 0x14d5
+	FTM0_MOD = 0x14d5;
+
+	// Clock source for iGaging calipers
+	FTM0_C7V = 0x042A; // 0x14d5 * 0.20 = 1066.6 or 0x42A
+	PORTD_PCR7 = PORT_PCR_SRE | PORT_PCR_DSE | PORT_PCR_MUX(4) | PORT_PCR_PE;
+
+	// Indicate that pulses have been enabled
+	distance_pulses_on = 1;
+
+
+	// Setup PIT (Programmable Interrupt Timer)
+	SIM_SCGC6 |= SIM_SCGC6_PIT;;
+	PIT_MCR = 0x00; // Enable module, do not freeze timers in debug mode
+
+	// Timer Count-down value
+	// (48 MHz / 9 KHz) * 21 cycles = 112 000 ticks (0x1B580)
+	PIT_LDVAL0 = 0x1B580;
+	//PIT_LDVAL0 = 0x2DC6C00; // Once per second
+
+	// Enable Timer, Enable interrupt
+	PIT_TCTRL0 = PIT_TCTRL_TIE | PIT_TCTRL_TEN;
+
+	// Enable PIT Ch0 interrupt
+	NVIC_ENABLE_IRQ( IRQ_PIT_CH0 );
+}
+
+
+
+// ------ Motor Control -----
+
+void motor_stop()
+{
+	// Pull high to stop motors
+	GPIOC_PSOR |= (1 << 8);
+	GPIOC_PSOR |= (1 << 9);
+}
+
+void motor_up_start()
+{
+	// First disable motor
+	motor_stop();
+
+	// Then check if limit switch is enabled
+	if ( !( GPIOC_PDIR & (1 << 10) ) )
+	{
+		erro_print("Upper limit switch triggered.");
+		return;
+	}
+
+	GPIOC_PCOR |= (1 << 8);
+}
+
+void motor_down_start()
+{
+	// First disable motor
+	motor_stop();
+
+	// Then check if limit switch is enabled
+	if ( !( GPIOE_PDIR & (1 << 0) ) )
+	{
+		erro_print("Lower limit switch triggered.");
+		return;
+	}
+
+	GPIOC_PCOR |= (1 << 9);
+}
+
+void portc_isr()
+{
+	// Check each of the interrupts and clear them
+	if ( PORTC_PCR10 & PORT_PCR_ISF )
+	{
+		motor_stop();
+		warn_print("Upper Limit Switch!");
+		PORTC_PCR10 |= PORT_PCR_ISF;
+	}
+}
+
+void porte_isr()
+{
+	// Check each of the interrupts and clear them
+	if ( PORTE_PCR0 & PORT_PCR_ISF )
+	{
+		motor_stop();
+		warn_print("Lower Limit Switch!");
+		PORTE_PCR0 |= PORT_PCR_ISF;
+	}
+}
+
+// Limit switch interrupt setup
+// Should be the highest level interrupt (to avoid having the test stand destroy itself)
+inline void limit_switch_setup()
+{
+	// TODO Decide on which pins to use
+	// Currently PTC10 and PTE0
+
+	// Enable GPIO, Interrupt on falling edge, Passive input filter, Pullups
+	PORTC_PCR10 = PORT_PCR_MUX(1) | PORT_PCR_IRQC(10) | PORT_PCR_PFE | PORT_PCR_PE | PORT_PCR_PS;
+	PORTE_PCR0  = PORT_PCR_MUX(1) | PORT_PCR_IRQC(10) | PORT_PCR_PFE | PORT_PCR_PE | PORT_PCR_PS;
+
+	// Set GPIO as input
+	GPIOC_PDIR |= (1 << 10);
+	GPIOE_PDIR |= (1 << 0);
+
+	// Enable IRQ
+	NVIC_ENABLE_IRQ( IRQ_PORTC );
+	NVIC_ENABLE_IRQ( IRQ_PORTE );
+
+	// Set IRQ has highest priority
+	NVIC_SET_PRIORITY( IRQ_PORTC, 0 );
+	NVIC_SET_PRIORITY( IRQ_PORTE, 0 );
+}
+
+inline void motor_control_setup()
+{
+	// TODO Decide on which pins to use
+	// Currently PTC8 and PTC9
+
+	// Stop motor
+	motor_stop();
+
+	// Set GPIO as output pins
+	GPIOC_PDDR |= (1 << 8);
+	GPIOC_PDDR |= (1 << 9);
+
+	// Enable GPIO, slow slew rate, high drive strength
+	PORTC_PCR8 = PORT_PCR_SRE | PORT_PCR_DSE | PORT_PCR_MUX(1);
+	PORTC_PCR9 = PORT_PCR_SRE | PORT_PCR_DSE | PORT_PCR_MUX(1);
+}
+
+
+
+
+
 
 // Main execution function
 int main()
 {
+	// Enable CLI
+	CLI_init();
+
+	// Register Force Gauge CLI dictionary
+	CLI_registerDictionary( forceGaugeCLIDict, forceGaugeCLIDictName );
+
+	// Setup - TODO
+	distance_setup();
+	limit_switch_setup();
+	motor_control_setup();
+
+	// Setup Modules
+	Output_setup();
+
+	// Main Detection Loop
+	while ( 1 )
+	{
+		// Process CLI
+		CLI_process();
+
+		// TODO
+	}
+
+
 #if 0
 	// Setup force gauge
 	forceSetup();
@@ -487,15 +710,30 @@ void cliFunc_distRead( char* args )
 			delay( 50 );
 	}
 }
+#endif
 
+void cliFunc_up( char* args )
+{
+	motor_up_start();
+}
+
+void cliFunc_down( char* args )
+{
+	motor_down_start();
+}
+
+void cliFunc_stop( char* args )
+{
+	motor_stop();
+}
 
 void cliFunc_free( char* args )
 {
 	// Set the forceDistanceRead to 1, which will read until start has passed twice
-	forceDistanceRead = 1;
+	//forceDistanceRead = 1;
 }
 
-
+#if 0
 void imadaVerboseRead( char* cmd )
 {
 	// Write command to data register

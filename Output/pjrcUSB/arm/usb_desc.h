@@ -61,9 +61,9 @@
 #define CDC_IAD_DESCRIPTOR      1
 #define CDC_STATUS_INTERFACE    0
 #define CDC_DATA_INTERFACE      1 // Serial
-#define CDC_ACM_ENDPOINT        0
-#define CDC_RX_ENDPOINT         1
-#define CDC_TX_ENDPOINT         2
+#define CDC_ACM_ENDPOINT        1
+#define CDC_RX_ENDPOINT         2
+#define CDC_TX_ENDPOINT         3
 #define CDC_ACM_SIZE            16
 #define CDC_RX_SIZE             64
 #define CDC_TX_SIZE             64
