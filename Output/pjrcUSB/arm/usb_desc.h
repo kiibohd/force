@@ -54,9 +54,9 @@
 #define DEVICE_SUBCLASS         0x00
 #define DEVICE_PROTOCOL         0x00
 #define EP0_SIZE                64
-#define NUM_ENDPOINTS           3
+#define NUM_ENDPOINTS           5
 #define NUM_USB_BUFFERS         30
-#define NUM_INTERFACE           2
+#define NUM_INTERFACE           3
 
 #define CDC_IAD_DESCRIPTOR      1
 #define CDC_STATUS_INTERFACE    0
@@ -70,12 +70,26 @@
 #define CDC_STATUS_NAME         L"Virtual Serial Port - Status"
 #define CDC_DATA_NAME           L"Virtual Serial Port - Data"
 
+#define RAWHID_USAGE_PAGE       0xFFAB // recommended: 0xFF00 to 0xFFFF
+#define RAWHID_USAGE            0x0200 // recommended: 0x0100 to 0xFFFF
+#define RAWHID_INTERFACE        2 // RawHID
+#define RAWHID_TX_ENDPOINT      4
+#define RAWHID_TX_SIZE          64
+#define RAWHID_TX_INTERVAL      1
+#define RAWHID_RX_ENDPOINT      5
+#define RAWHID_RX_SIZE          64
+#define RAWHID_RX_INTERVAL      1
+#define RAWHID_NAME             L"API Interface"
+
 #define SERIAL_CDC_DESC_OFFSET    (9 + 8)
-#define CONFIG_DESC_SIZE          (9 + 8+9+5+5+4+5+7+9+7+7)
+#define RAWHID_DESC_OFFSET        (9 + 8+9+5+5+4+5+7+9+7+7 + 9)
+#define CONFIG_DESC_SIZE          (9 + 8+9+5+5+4+5+7+9+7+7 + 9+9+7+7)
 
 #define ENDPOINT1_CONFIG        ENDPOINT_TRANSIMIT_ONLY
 #define ENDPOINT2_CONFIG        ENDPOINT_RECEIVE_ONLY
 #define ENDPOINT3_CONFIG        ENDPOINT_TRANSIMIT_ONLY
+#define ENDPOINT4_CONFIG        ENDPOINT_TRANSIMIT_ONLY
+#define ENDPOINT5_CONFIG        ENDPOINT_RECEIVE_ONLY
 
 
 

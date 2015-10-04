@@ -94,6 +94,26 @@ static uint8_t usb_debug_descriptor[] = {
 
 
 
+// ----- USB HID Report Descriptors -----
+
+static uint8_t rawhid_report_desc[] = {
+        0x06, LSB( RAWHID_USAGE_PAGE ), MSB( RAWHID_USAGE_PAGE ),
+        0x0A, LSB( RAWHID_USAGE ), MSB( RAWHID_USAGE ),
+        0xA1, 0x01,                             // Collection 0x01
+        0x75, 0x08,                             // report size = 8 bits
+        0x15, 0x00,                             // logical minimum = 0
+        0x26, 0xFF, 0x00,                       // logical maximum = 255
+        0x95, RAWHID_TX_SIZE,                   // report count
+        0x09, 0x01,                             // usage
+        0x81, 0x02,                             // Input (array)
+        0x95, RAWHID_RX_SIZE,                   // report count
+        0x09, 0x02,                             // usage
+        0x91, 0x02,                             // Output (array)
+        0xC0                                    // end collection
+};
+
+
+
 // ----- USB Configuration -----
 
 // USB Configuration Descriptor.  This huge descriptor tells all
@@ -197,6 +217,47 @@ static uint8_t config_descriptor[CONFIG_DESC_SIZE] = {
 	0x02,                                   // bmAttributes (0x02=bulk)
 	CDC_TX_SIZE, 0,                         // wMaxPacketSize
 	0,                                      // bInterval
+
+// --- Raw HID ---
+// - 9 bytes -
+        // interface descriptor, USB spec 9.6.5, page 267-269, Table 9-12
+        9,                                      // bLength
+        4,                                      // bDescriptorType
+        RAWHID_INTERFACE,                       // bInterfaceNumber
+        0,                                      // bAlternateSetting
+        2,                                      // bNumEndpoints
+        0x03,                                   // bInterfaceClass (0x03 = HID)
+        0x00,                                   // bInterfaceSubClass
+        0x00,                                   // bInterfaceProtocol
+        RAWHID_INTERFACE + 4,                   // iInterface
+// - 9 bytes -
+        // HID interface descriptor, HID 1.11 spec, section 6.2.1
+        9,                                      // bLength
+        0x21,                                   // bDescriptorType
+        0x11, 0x01,                             // bcdHID
+        0,                                      // bCountryCode
+        1,                                      // bNumDescriptors
+        0x22,                                   // bDescriptorType
+        LSB( sizeof(rawhid_report_desc) ),      // wDescriptorLength
+        MSB( sizeof(rawhid_report_desc) ),
+
+// - 7 bytes -
+        // endpoint descriptor, USB spec 9.6.6, page 269-271, Table 9-13
+        7,                                      // bLength
+        5,                                      // bDescriptorType
+        RAWHID_TX_ENDPOINT | 0x80,              // bEndpointAddress
+        0x03,                                   // bmAttributes (0x03=intr)
+        RAWHID_TX_SIZE, 0,                      // wMaxPacketSize
+        RAWHID_TX_INTERVAL,                     // bInterval
+
+// - 7 bytes -
+        // endpoint descriptor, USB spec 9.6.6, page 269-271, Table 9-13
+        7,                                      // bLength
+        5,                                      // bDescriptorType
+        RAWHID_RX_ENDPOINT,                     // bEndpointAddress
+        0x03,                                   // bmAttributes (0x03=intr)
+        RAWHID_RX_SIZE, 0,                      // wMaxPacketSize
+        RAWHID_RX_INTERVAL,                     // bInterval
 };
 
 
@@ -238,6 +299,7 @@ usb_string_descriptor( usb_string_product_name_default, STR_PRODUCT );
 usb_string_descriptor( usb_string_serial_number_default, STR_SERIAL );
 usb_string_descriptor( usb_string_cdc_status_name, CDC_STATUS_NAME );
 usb_string_descriptor( usb_string_cdc_data_name, CDC_DATA_NAME );
+usb_string_descriptor( usb_string_rawhid_name, RAWHID_NAME );
 
 
 
@@ -252,6 +314,9 @@ const usb_descriptor_list_t usb_descriptor_list[] = {
 	{0x0600, 0x0000, device_qualifier_descriptor, sizeof(device_qualifier_descriptor)},
 	{0x0A00, 0x0000, usb_debug_descriptor, sizeof(usb_debug_descriptor)},
 
+	{0x2200, RAWHID_INTERFACE, rawhid_report_desc, sizeof(rawhid_report_desc)},
+	{0x2100, RAWHID_INTERFACE, config_descriptor + RAWHID_DESC_OFFSET, 9},
+
 #define iInterfaceString(num, var) \
 	{0x0300 + 4 + num, 0x409, (const uint8_t *)&var, 0 }
 
@@ -261,6 +326,7 @@ const usb_descriptor_list_t usb_descriptor_list[] = {
 	{0x0303, 0x0409, (const uint8_t *)&usb_string_serial_number, 0},
 	iInterfaceString( CDC_STATUS_INTERFACE, usb_string_cdc_status_name ),
 	iInterfaceString( CDC_DATA_INTERFACE, usb_string_cdc_data_name ),
+	iInterfaceString( RAWHID_INTERFACE, usb_string_rawhid_name ),
 	{0, 0, NULL, 0}
 };
 
