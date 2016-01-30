@@ -1,0 +1,106 @@
+Pin Usage
+=========
+
+mk20dx256vlh7 - Teensy 3.1
+
+ --------
+|Switches|
+ --------
+
+Limit Switches
+Up   - PTC10
+Down - PTE0
+
+TODO - 8 switches
+
+
+ -----
+|Imada|
+ -----
+
+UART - UART0 (Calibration Base)
+RX0 - PTB16
+TX0 - PTB17
+
+ADC - ADC0 (High-speed Monitor) (Only reads push force due to diode)
+ADC0_C3 - A14
+
+
+ -------
+|iGaging|
+ -------
+
+FTM/PWM - PTD7
+
+SPI Mode - Slave (Compile option)
+MOSI/SIN - PTC7
+SCLK/SCK - PTD1 (wired to PTD7)
+
+GPIO Mode (Compile option, default)
+DATA IN - PTC7
+CLK  IN - PTD1 (wired to PTD7)
+
+
+ -----
+|Motor|
+ -----
+
+Motor
+Up   - PTC8
+Down - PTC9
+
+TODO - SPI Pot (speed control)
+SPI - ?
+
+
+ ----------
+|Continuity|
+ ----------
+
+Pull down sense
+PTD6
+
+
+ ------
+|Buzzer|
+ ------
+
+DAC0 - Buzzer (GND is on, 5 V is off)
+TODO - Determine how to center around 5V
+
+
+ ----
+|LEDs|
+ ----
+
+TODO - 1x led
+GPIO
+
+
+ -------
+|Display|
+ -------
+
+TODO - Shift register display - 4 pins
+
+
+ ------
+|Unused|
+ ------
+
+* GPIO
+
+PTA4
+PTA12
+PTA13
+PTC4
+PTC5
+PTC6
+PTC7
+PTE0
+PTE1
+
+* Analog
+
+TODO
+

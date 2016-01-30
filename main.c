@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2015 by Jacob Alexander
+/* Copyright (C) 2011-2016 by Jacob Alexander
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -42,221 +42,134 @@
 
 
 
+// ----- Enums -----
+
+typedef enum ForceCaptureMode {
+	ForceCaptureMode_OnRequest          = 0x0,
+
+	ForceCaptureMode_FreeRun_ADC        = 0x1,
+	ForceCaptureMode_FreeRun_Serial     = 0x2,
+	ForceCaptureMode_FreeRun_Continuity = 0x4,
+	ForceCaptureMode_FreeRun_Direction  = 0x8,
+	ForceCaptureMode_FreeRun_Speed      = 0x10,
+
+	ForceCaptureMode_FreeRun_Full       = 0xFF,
+} ForceCaptureMode;
+
+
+
+// ----- Structs -----
+
+// Struct of all free-running datapoints
+typedef struct ForceCurveDataPoint {
+	uint8_t  continuity;
+	uint8_t  direction;
+	uint32_t distance;
+	uint16_t force_adc;
+	char     force_serial[10];
+	uint16_t speed;
+} ForceCurveDataPoint;
+
+
+
 // ----- Function Declarations -----
 
 void cliFunc_down        ( char* args );
+void cliFunc_free        ( char* args );
+void cliFunc_stat        ( char* args );
 void cliFunc_stop        ( char* args );
 void cliFunc_up          ( char* args );
+void cliFunc_zero        ( char* args );
 
-void cliFunc_contRead    ( char* args );
-void cliFunc_distRead    ( char* args );
-void cliFunc_free        ( char* args );
-void cliFunc_gaugeHelp   ( char* args );
-void cliFunc_imadaComm   ( char* args );
-void cliFunc_read        ( char* args );
-void cliFunc_start       ( char* args );
-void cliFunc_stop        ( char* args );
-void cliFunc_zeroForce   ( char* args );
-void cliFunc_zeroPosition( char* args );
+void motor_stop();
+void motor_up_start();
+void motor_down_start();
 
-char receiveUART0Char();
-
-void transmitUART0String( char* str );
-
-uint32_t readDistanceGauge();
-
-void continuityTest();
 
 
 // ----- Variables -----
 
 // Force Gauge command dictionary
-CLIDict_Entry( up,    "Enable motor up signal" );
+CLIDict_Entry( free,  "Toggle free-running modes: f - full on; o - full off; a - adc; s - serial" NL "\t\tc - continuity; i - direction; p - speed" );
 CLIDict_Entry( down,  "Enable motor down signal" );
+CLIDict_Entry( stat,  "Current measurements, will query devices if not in free-running mode" );
 CLIDict_Entry( stop,  "Stop motor movement" );
+CLIDict_Entry( up,    "Enable motor up signal" );
+CLIDict_Entry( zero,  "Zero gauges" );
 
 CLIDict_Def( forceGaugeCLIDict, "Force Curve Gauge Commands" ) = {
 	CLIDict_Item( down ),
+	CLIDict_Item( free ),
+	CLIDict_Item( stat ),
 	CLIDict_Item( stop ),
 	CLIDict_Item( up ),
+	CLIDict_Item( zero ),
 	{ 0, 0, 0 } // Null entry for dictionary end
 };
 
 
-#if 0
-// Force Gauge command dictionary
-char*       forceGaugeCLIDictName = "Force Curve Gauge Commands";
-CLIDictItem forceGaugeCLIDict[] = {
-	{ "contRead",      "Read the continuity value. Needs to be attachd to two terminals on a switch. Strobe/Sense.", cliFunc_contRead },
-	{ "distRead",      "Read the current value from the distance gauge.  See \033[35mgaugeHelp\033[0m for more details.", cliFunc_distRead },
-	{ "free",          "Enables free reporting, reports every distance unit (as defined by the calipers).", cliFunc_free },
-	{ "gaugeHelp",     "Description on how to use the force gauge firmware.", cliFunc_gaugeHelp },
-	{ "imadaComm",     "Send specific commands to the Imada force gauge. See \033[35mgaugeHelp\033[0m for more details.", cliFunc_imadaComm },
-	{ "read",          "Query a force/distance measurement. See \033[35mgaugeHelp\033[0m for more details.", cliFunc_read },
-	{ "start",         "Mark the current distance as the start/end position, offset is optional.", cliFunc_start },
-	{ "stop",          "Stop free reporting or read loop.", cliFunc_stop },
-	{ "zeroForce",     "Zero out the force gauge.", cliFunc_zeroForce },
-	{ "zeroPosition",  "Mark the minimum distance for this measurement (bottom).", cliFunc_zeroPosition },
-	{ 0, 0, 0 } // Null entry for dictionary end
-};
+// Default Capture mode
+ForceCaptureMode Main_ForceCaptureMode = ForceCaptureMode_OnRequest;
 
-uint8_t force_freeRunning;
-uint8_t continuityState         = 0; // 0 - None, 1 - Continuity
-
-uint32_t distanceStart          = 0; // Offset is not used
-uint32_t distanceOffset         = 0;
-uint32_t forceDistanceRead      = 0;
-int32_t  forceDistanceReadCount = 0;
+// Free-running datastore
+volatile ForceCurveDataPoint Main_FreeRunData;
 
 
-// ----- Functions -----
-
-// Initial Pin Setup, make sure they are sane
-inline void pinSetup()
-{
-	// Distance Sensor Pin Setup
-	// 22 - C1 - Green - Data
-	// 23 - C2 - White - Clk
-	// Enable pins
-	GPIOC_PDDR &= ~(1<<1); // Input
-	GPIOC_PDDR |=  (1<<2); // Output
-
-	PORTC_PCR1 = PORT_PCR_PFE | PORT_PCR_PE | PORT_PCR_PS | PORT_PCR_MUX(1); // Pullup resistor
-	PORTC_PCR2 = PORT_PCR_DSE | PORT_PCR_MUX(1);
-
-
-	// Continuity Tester Pin Setup
-	// 20 - D5 - Strobe
-	// 21 - D6 - Sense
-	// Enable pins
-	GPIOD_PDDR |=  (1<<5); // Output
-	GPIOD_PDDR &= ~(1<<6); // Input
-
-	PORTD_PCR5 = PORT_PCR_DSE | PORT_PCR_MUX(1);
-	PORTD_PCR6 = PORT_PCR_PFE | PORT_PCR_PE | PORT_PCR_MUX(1); // Pulldown resistor
-}
-
-
-// UART Setup for Imada Force gauge
-inline void uartSetup()
-{
-	// Setup the the UART interface for keyboard data input
-	SIM_SCGC4 |= SIM_SCGC4_UART0; // Disable clock gating
-
-	// Pin Setup for UART0
-	PORTB_PCR16 = PORT_PCR_PE | PORT_PCR_PS | PORT_PCR_PFE | PORT_PCR_MUX(3); // RX Pin
-	PORTB_PCR17 = PORT_PCR_DSE | PORT_PCR_SRE | PORT_PCR_MUX(3); // TX Pin
-
-//#define DPS_1R
-#define DS2_1
-#ifdef DPS_1R
-	// DPS-1R - Uses a much slower baud rate
-	// Setup baud rate - 2400 Baud
-	// 48 MHz / ( 16 * Baud ) = BDH/L
-	// Baud: 2400 -> 48 MHz / ( 16 * 2400 ) = 1250
-	// Thus baud setting = 1250
-	// NOTE: If finer baud adjustment is needed see UARTx_C4 -> BRFA in the datasheet
-	uint16_t baud = 1250; // Max setting of 8191
-#elif defined(DS2_1)
-	// DS2-1 - Uses a more modern baud rate
-	// Setup baud rate - 19200 Baud
-	// 48 MHz / ( 16 * Baud ) = BDH/L
-	// Baud: 19200 -> 48 MHz / ( 16 * 19200 ) = 156.25
-	// Thus baud setting = 156
-	uint16_t baud = 156; // Max setting of 8191
-#else
-	erro_print("Force gauge not set...please recompile.");
-#endif
-	UART0_BDH = (uint8_t)(baud >> 8);
-	UART0_BDL = (uint8_t)baud;
-
-	// 8 bit, No Parity, Idle Character bit after stop
-	// NOTE: For 8 bit with Parity you must enable 9 bit transmission (pg. 1065)
-	//       You only need to use UART0_D for 8 bit reading/writing though
-	// UART_C1_M UART_C1_PE UART_C1_PT UART_C1_ILT
-	UART0_C1 = UART_C1_ILT;
-
-	// Number of bytes in FIFO before TX Interrupt
-	UART0_TWFIFO = 1;
-
-	// Number of bytes in FIFO before RX Interrupt
-	UART0_RWFIFO = 1;
-
-	// TX FIFO Disabled, RX FIFO Enabled
-	// UART_PFIFO_TXFE UART_PFIFO_RXFE
-	UART0_C2 = 0; // Has to be cleared before setting PFIFO (see docs)
-	UART0_PFIFO = UART_PFIFO_RXFE;
-
-	// TX/RX FIFO Size:
-	//  0x0 - 1 dataword
-	//  0x1 - 4 dataword
-	//  0x2 - 8 dataword
-	//   etc. (see docs)
-#ifdef FIFO_DEBUG
-	dbug_msg("FIFO Sizes TX: ");
-	printHex( UART0_PFIFO & 0x70 >> 4 );
-	print(" RX: ");
-	printHex( UART0_PFIFO & 0x07 );
-	print( NL );
-#endif
-
-	// Reciever Inversion Disabled, LSBF
-	// UART_S2_RXINV UART_S2_MSBF
-	UART0_S2 |= 0x00;
-
-	// Transmit Inversion Disabled
-	// UART_C3_TXINV
-	UART0_C3 |= 0x00;
-
-	// TX Enabled, RX Enabled
-	// UART_C2_TE UART_C2_RE UART_C2_RIE
-	UART0_C2 = UART_C2_RE | UART_C2_TE;
-
-	// Add interrupt to the vector table
-	NVIC_ENABLE_IRQ( IRQ_UART0_STATUS );
-}
-
-
-// Force gauge setup
-inline void forceSetup()
-{
-	// Configuring Pins
-	pinSetup();
-	init_errorLED();
-
-	// Setup Output Module
-	output_setup();
-
-	// UART Setup
-	uartSetup();
-
-	// Enable CLI
-	init_cli();
-
-	// Register Force Gauge dictionary
-	registerDictionary_cli( forceGaugeCLIDict, forceGaugeCLIDictName );
-
-	// Initialization of force gauge variables
-	force_freeRunning = 0;
-}
-#endif
 
 // ------ Distance Measurement ------
 
 // PWM Input Interrupt
-volatile uint8_t distance_pulses_on = 0;
+volatile uint8_t  distance_pulses_on = 0;
+volatile uint8_t  distance_bit_pos = 0;
+volatile uint32_t distance_read_data = 0;
 void pit0_isr()
 {
-	//dbug_print("YUSH");
 	// If pulses are on, turn off
 	if ( distance_pulses_on )
 	{
 		// Disable FTM PWM
 		FTM0_C7SC = 0x00;
+
+//#define SPI_DIST
+#ifdef SPI_DIST
+		// Read spi
+		// TODO Cleanup
+		print(NL);
+		printHex( SPI0_SR & SPI_SR_RXCTR );
+		print(" ");
+
+		// Expecting to read 3 16 bit values from the FIFO
+		// Only the first 7 bits have useful data
+		if ( ( ( SPI0_SR & SPI_SR_RXCTR ) >> 4 ) > 0 )
+		{
+			uint32_t data = (SPI0_POPR << 16) | (SPI0_POPR << 8) | (SPI0_POPR << 1);
+			asm( "rbit %1,%0" : "=r" ( data ) : "r" ( data ) ); // Cortex M4 Instruction MSB to LSB
+			printInt32( ( data >> 8 ) & 0xFFFFF );
+			//printInt16( ( data >> 8 ) & 0xFFFF );
+			//printHex32( data >> 8 );
+		}
+
+		// Flush Rx FIFO
+		SPI0_MCR |= SPI_MCR_CLR_RXF;
+#else
+		// Reset bit position
+		distance_bit_pos = 0;
+#endif
 	}
 	// Otherwise turn them on
 	else
 	{
+#ifdef SPI_DIST
+		// Flush Rx FIFO
+		SPI0_MCR |= SPI_MCR_CLR_RXF;
+#else
+		// Reset bit position
+		distance_bit_pos = 0;
+#endif
+
+		// Reset the PWM counter as we aren't quite sure where the internal counter is right now
+		FTM0_CNT = 0; // Reset counter
+
 		// Set FTM to PWM output - Edge Aligned, High-true pulses
 		FTM0_C7SC = 0x28; // MSnB:MSnA = 10, ELSnB:ELSnA = 01
 	}
@@ -305,7 +218,10 @@ inline void distance_setup()
 
 	// Timer Count-down value
 	// (48 MHz / 9 KHz) * 21 cycles = 112 000 ticks (0x1B580)
-	PIT_LDVAL0 = 0x1B580;
+	// (48 MHz / 9 KHz) * 22 cycles = 117 333 ticks (0x1CA55)
+	// (48 MHz / 9 KHz) * 23 cycles = 122 667 ticks (0x1DF2A)
+	//PIT_LDVAL0 = 0x1B580;
+	PIT_LDVAL0 = 0x1CA55;
 	//PIT_LDVAL0 = 0x2DC6C00; // Once per second
 
 	// Enable Timer, Enable interrupt
@@ -313,11 +229,447 @@ inline void distance_setup()
 
 	// Enable PIT Ch0 interrupt
 	NVIC_ENABLE_IRQ( IRQ_PIT_CH0 );
+
+	// Set PIT0 interrupt to 2nd highest priority
+	NVIC_SET_PRIORITY( IRQ_PIT_CH0, 1 );
+
+
+#ifdef SPI_DIST
+	// Setup SPI interface to work as a running shift register
+	// Enable SPI internal clock
+	SIM_SCGC6 |= SIM_SCGC6_SPI0;
+
+	// Setup MOSI (SIN) and SCLK (SCK)
+	PORTC_PCR7 = PORT_PCR_DSE | PORT_PCR_MUX(2) | PORT_PCR_PFE | PORT_PCR_PE | PORT_PCR_PS;
+	PORTD_PCR1 = PORT_PCR_DSE | PORT_PCR_MUX(2) | PORT_PCR_PFE | PORT_PCR_PE;
+
+	// Setup SS (PCS)
+	PORTC_PCR4 = PORT_PCR_DSE | PORT_PCR_MUX(2) | PORT_PCR_PE;
+
+	// Slave Mode
+	// Inactive chip state PCS0 is high
+	SPI0_MCR = SPI_MCR_PCSIS(1) | SPI_MCR_CONT_SCKE;
+
+	// DSPI Clock and Transfer Attributes
+	// Frame Size: 21 bits or 7 * 3
+	// CPHA Leading edge, following capture
+	// CLK Low by default
+	SPI0_CTAR0_SLAVE = SPI_CTAR_FMSZ(6) | SPI_CTAR_CPHA;
+#else
+	// GPIO Interrupt Bit-Bang
+
+	// Distance Sensor Pin Setup
+	// Enable pins
+	GPIOC_PDDR &= ~(1<<7); // Input Data
+	GPIOD_PDDR &= ~(1<<1); // Input Clk
+
+	PORTC_PCR7 = PORT_PCR_PFE | PORT_PCR_MUX(1) | PORT_PCR_PE | PORT_PCR_PS;
+	PORTD_PCR1 = PORT_PCR_PFE | PORT_PCR_MUX(1) | PORT_PCR_PE | PORT_PCR_IRQC(10); // Falling edge detect
+
+	// Enable IRQ
+	NVIC_ENABLE_IRQ( IRQ_PORTD );
+
+	// Set PORTD interrupt to 3rd highest priority
+	NVIC_SET_PRIORITY( IRQ_PORTD, 2 );
+#endif
 }
 
 
 
-// ------ Motor Control -----
+// ------ Force Measurement ------
+
+// TODO may need some sort of synchronization between full reads
+volatile uint8_t uart0_pos = 0;
+void uart0_status_isr()
+{
+	// UART0_S1 must be read for the interrupt to be cleared
+	if ( UART0_S1 & ( UART_S1_RDRF | UART_S1_IDLE ) )
+	{
+		uint8_t available = UART0_RCFIFO;
+
+		// If there was actually nothing
+		if ( available == 0 )
+		{
+			// Cleanup
+			available = UART0_D;
+			UART0_CFIFO = UART_CFIFO_RXFLUSH;
+			goto done;
+		}
+
+		// Read UART0 into buffer until FIFO is empty
+		while ( available-- > 0 )
+		{
+			Main_FreeRunData.force_serial[uart0_pos] = UART0_D;
+
+			if ( Main_FreeRunData.force_serial[uart0_pos++] == '\r' )
+			{
+				// Remove final CR
+				Main_FreeRunData.force_serial[uart0_pos - 1] = 0x00;
+
+				uart0_pos = 0;
+
+				// Check the MSD to make sure we haven't exceeded 600g
+				// XXX The gauge is designed to work +/- 500g with 200% overload capacity
+				// To be safe, checking for 6,7,8,9 in the MSD (this is then 2nd character)
+				// Format Example +123.4KTO
+				// This is not a full string comparison because this needs to be detected extremely quickly in case of problems
+				switch ( Main_FreeRunData.force_serial[1] )
+				{
+				case '4':
+				case '5':
+				case '6':
+				case '7':
+				case '8':
+				case '9':
+					// STOP Motor
+					motor_up_start();
+					warn_msg("Over force! - ");
+					dPrint( (char*)Main_FreeRunData.force_serial );
+					print( NL );
+					break;
+				}
+
+				// Queue the next command
+				UART0_D = 'D';
+				UART0_D = '\r';
+			}
+		}
+	}
+
+done:
+	return;
+}
+
+// Send each character from the string (except the NULL), waiting until each character is sent before proceeding
+// NOTE: There is no delay after sending the last character
+//       If first character is NULL, it will be sent
+inline uint8_t force_serial_tx( char* str )
+{
+	// Only use if free running serial mode is not enabled
+	if ( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_Serial )
+		return 0;
+
+	// Loop through string
+	// XXX Does not take into account the Tx FIFO size
+	//     Shouldn't be an issue as most commands are only 2 bytes long
+	while ( *str != '\0' )
+	{
+		UART0_D = *str++; // Send dataword (character)
+	}
+
+	return 1;
+}
+
+// Wait until FIFO has a character (no timeout...)
+inline uint8_t force_serial_rx( char* data, uint16_t timeout )
+{
+	// Only use if free running serial mode is not enabled
+	if ( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_Serial )
+		return 0;
+
+	// Wait for a response (something to arrive in the FIFO)
+	uint32_t cur_time = systick_millis_count;
+	while ( UART0_SFIFO & UART_SFIFO_RXEMPT )
+	{
+		// Check for timeout
+		if ( systick_millis_count - cur_time >= timeout )
+		{
+			return 2;
+		}
+	}
+
+	// Read from RX FIFO
+	*data = UART0_D;
+
+	return 1;
+}
+
+// Send and wait for response from the force gauge
+uint8_t force_serial_cmd( char cmd, char* data, uint8_t data_len, uint16_t timeout )
+{
+	// Write command to data register
+	//  NOTE: Imada only uses single byte commands, this makes it easy
+	//        Always followed by a '\r' CR
+	char outCmd[] = { cmd, '\r', 0x00 };
+	if ( !force_serial_tx( outCmd ) )
+		goto force_error;
+
+	uint8_t pos;
+retry:
+	pos = 0;
+
+	// Make sure there's enough room in the buffer
+	while ( pos < data_len )
+	{
+		// Check for a timeout
+		if ( force_serial_rx( &data[pos], timeout ) == 2 )
+		{
+			goto force_timeout;
+		}
+
+		// Check for a CR (final output character of a response)
+		if ( data[pos++] == '\r' )
+		{
+			// Remove final CR
+			data[pos - 1] = 0x00;
+			return 0;
+		}
+	}
+	goto force_space;
+
+force_space:
+	warn_print("Serial buffer room exceeded...");
+	goto retry;
+
+force_timeout:
+	warn_print("Serial command timeout...");
+	goto force_error;
+
+force_error:
+	erro_print("Problem sending force gauge command: ");
+	char tmpStr[] = { cmd, 0x00 };
+	dPrint( tmpStr );
+	print(" (");
+	printHex( outCmd[0] );
+	print(" ");
+	printHex( outCmd[1] );
+	print(")" NL);
+
+	UART0_CFIFO |= UART_CFIFO_TXFLUSH | UART_CFIFO_RXFLUSH;
+
+	return 0;
+}
+
+inline void force_setup()
+{
+	// Setup force gauge
+	// Two methods are used to collect data
+	// 1) Serial/RS232 input (calibrated)
+	// 2) Analog (uncalibrated)
+	//
+	// RS232 runs rather slowly, while the ADCs can be set to free-running
+	// Periodically retrieving serial data means that the more accurate/faster ADC data can be calibrated correctly
+	// Rather than doing the correlation immediately, both datapoints are used
+
+	// The following force gauges are supported (and likely any force gauge in that family)
+	// * DS2-1
+	// * DPS-1R
+#define DS2_1
+#ifdef DPS_1R
+	// DPS-1R - Uses a much slower baud rate
+	// Setup baud rate - 2400 Baud
+	// 48 MHz / ( 16 * Baud ) = BDH/L
+	// Baud: 2400 -> 48 MHz / ( 16 * 2400 ) = 1250
+	// Thus baud setting = 1250
+	// NOTE: If finer baud adjustment is needed see UARTx_C4 -> BRFA in the datasheet
+	uint16_t baud = 1250; // Max setting of 8191
+#elif defined(DS2_1)
+	// DS2-1 - Uses a more modern baud rate
+	// Setup baud rate - 19200 Baud
+	// 48 MHz / ( 16 * Baud ) = BDH/L
+	// Baud: 19200 -> 48 MHz / ( 16 * 19200 ) = 156.25
+	// Thus baud setting = 156
+	uint16_t baud = 156; // Max setting of 8191
+#else
+	erro_print("Force gauge not set...please recompile.");
+#endif
+
+	// Setup the the UART interface for keyboard data input
+	SIM_SCGC4 |= SIM_SCGC4_UART0; // Disable clock gating
+
+	// Pin Setup for UART0
+	PORTB_PCR16 = PORT_PCR_PE | PORT_PCR_PS | PORT_PCR_PFE | PORT_PCR_MUX(3); // RX Pin
+	PORTB_PCR17 = PORT_PCR_DSE | PORT_PCR_SRE | PORT_PCR_MUX(3); // TX Pin
+
+	UART0_BDH = (uint8_t)(baud >> 8);
+	UART0_BDL = (uint8_t)baud;
+
+	// 8 bit, No Parity, Idle Character bit after stop
+	// NOTE: For 8 bit with Parity you must enable 9 bit transmission (pg. 1065)
+	//       You only need to use UART0_D for 8 bit reading/writing though
+	// UART_C1_M UART_C1_PE UART_C1_PT UART_C1_ILT
+	UART0_C1 = UART_C1_ILT;
+
+	// Number of bytes in FIFO before TX Interrupt
+	UART0_TWFIFO = 1;
+
+	// Number of bytes in FIFO before RX Interrupt
+	UART0_RWFIFO = 1;
+
+	// TX FIFO Enabled, RX FIFO Enabled
+	// UART_PFIFO_TXFE UART_PFIFO_RXFE
+	UART0_C2 = 0; // Has to be cleared before setting PFIFO (see docs)
+	UART0_PFIFO = UART_PFIFO_RXFE | UART_PFIFO_TXFE;
+
+	// TX/RX FIFO Size:
+	//  0x0 - 1 dataword
+	//  0x1 - 4 dataword
+	//  0x2 - 8 dataword
+	//   etc. (see docs)
+#ifdef FIFO_DEBUG
+	dbug_msg("FIFO Sizes TX: ");
+	printHex( UART0_PFIFO & 0x70 >> 4 );
+	print(" RX: ");
+	printHex( UART0_PFIFO & 0x07 );
+	print( NL );
+#endif
+
+	// Reciever Inversion Disabled, LSBF
+	// UART_S2_RXINV UART_S2_MSBF
+	UART0_S2 |= 0x00;
+
+	// Transmit Inversion Disabled
+	// UART_C3_TXINV
+	UART0_C3 |= 0x00;
+
+	// TX Enabled, RX Enabled
+	// UART_C2_TE UART_C2_RE UART_C2_RIE
+	UART0_C2 = UART_C2_RE | UART_C2_TE;
+
+	// Add interrupt to the vector table
+	NVIC_ENABLE_IRQ( IRQ_UART0_STATUS );
+
+	// Zero out serial display
+	char commandOut[10];
+	force_serial_cmd( 'Z', commandOut, sizeof( commandOut ), 1000 );
+
+
+	// ---- ADC Setup ----
+
+	// Make sure calibration has stopped
+	ADC0_SC3 = 0;
+
+	// 16-bit
+	ADC0_CFG1 = ADC_CFG1_ADIV(1) + ADC_CFG1_MODE(3) + ADC_CFG1_ADLSMP;
+	ADC0_CFG2 = ADC_CFG2_MUXSEL + ADC_CFG2_ADLSTS(2);
+
+	// 1.2V internal Vref
+	ADC0_SC2 = ADC_SC2_REFSEL(1);
+
+	// 32 sample averaging
+	ADC0_SC3 = ADC_SC3_CAL + ADC_SC3_AVGE + ADC_SC3_AVGS(3);
+
+	// Wait for calibration
+	while ( ADC0_SC3 & ADC_SC3_CAL );
+}
+
+uint8_t force_adc_read( uint16_t *data, uint16_t timeout )
+{
+	// Only use if free running adc mode is not enabled
+	if ( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_ADC )
+		return 0;
+
+	// Set calibration
+	uint16_t sum;
+
+	// XXX Why is PJRC doing this? Is the self-calibration not good enough? -HaaTa
+	// ADC Plus-Side Gain Register
+	__disable_irq(); // Disable interrupts
+	sum = ADC0_CLPS + ADC0_CLP4 + ADC0_CLP3 + ADC0_CLP2 + ADC0_CLP1 + ADC0_CLP0;
+	sum = (sum / 2) | 0x8000;
+	ADC0_PG = sum;
+
+#if ADC_DEBUG
+	print( NL );
+	info_msg("Calibration ADC0_PG (Plus-Side Gain Register)  set to: ");
+	printInt16( sum );
+#endif
+	__enable_irq(); // Re-enable interrupts
+
+	// Channel
+	ADC0_SC1A = 23;
+
+	// Wait until the ADC is finished (or fails timeout)
+	uint32_t cur_time = systick_millis_count;
+	while ( systick_millis_count - cur_time < timeout )
+	{
+		if ( (ADC0_SC1A & ADC_SC1_COCO) )
+		{
+			// Max of 16bits anyways
+			*data = (uint16_t)ADC0_RA;
+			return 1;
+		}
+
+		yield(); // Service interrupts
+	}
+
+	warn_print("ADC read timeout...");
+	return 0;
+}
+
+
+
+// ------ Continuity ------
+
+void portd_isr()
+{
+	// Check each of the interrupts and clear them
+	if ( PORTD_PCR6 & PORT_PCR_ISF )
+	{
+		// Read current level
+		Main_FreeRunData.continuity = GPIOD_PDIR & (1<<6) ? 1 : 0;
+
+		// Clear interrupt
+		PORTD_PCR6 |= PORT_PCR_ISF;
+	}
+
+	// Distance bit-bang
+	if ( PORTD_PCR1 & PORT_PCR_ISF )
+	{
+#ifdef DIST_DEBUG
+		print( GPIOC_PDIR & (1<<7) ? "1" : "0" );
+#endif
+		distance_read_data |= GPIOC_PDIR & (1<<7) ? (1 << distance_bit_pos) : 0;
+		distance_bit_pos++;
+
+		// Finished building variable
+		if ( distance_bit_pos >= 21 )
+		{
+#ifdef DIST_DEBUG
+			print(" ");
+			printInt32( distance_read_data );
+			print(NL);
+#endif
+			// Set the new distance
+			Main_FreeRunData.distance = distance_read_data;
+
+			// Reset data
+			distance_read_data = 0;
+		}
+
+		// Clear interrupt
+		PORTD_PCR1 |= PORT_PCR_ISF;
+	}
+}
+
+void continuity_setup()
+{
+	// Continuity Tester Pin Setup
+	// Goal is to detect voltage high
+	// 21 - D6 - Sense
+	// TODO confirm pin
+	GPIOD_PDDR &= ~(1<<6); // Input
+
+	// Pulldown resistor, interrupt on either edge, passive input filter
+	PORTD_PCR6 = PORT_PCR_PFE | PORT_PCR_PE | PORT_PCR_MUX(1) | PORT_PCR_IRQC(11);
+
+	// Enable IRQ
+	NVIC_ENABLE_IRQ( IRQ_PORTD );
+}
+
+uint8_t continuity_read( uint8_t *data )
+{
+	// Only use if free running continuity mode is not enabled
+	if ( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_Continuity )
+		return 0;
+
+	*data = GPIOD_PDIR & (1<<6) ? 1 : 0;
+	return 1;
+}
+
+
+
+// ------ Motor Control ------
 
 void motor_stop()
 {
@@ -421,10 +773,47 @@ inline void motor_control_setup()
 
 
 
+// ------ Timer ------
+
+inline void timer_setup()
+{
+	// Chained timers to create a 32 bit microsecond counter
+	// This is only used to determine the time between readings rather than "timestamping"
+
+	// Setup PIT (Programmable Interrupt Timer)
+	SIM_SCGC6 |= SIM_SCGC6_PIT;;
+	PIT_MCR = 0x00; // Enable module, do not freeze timers in debug mode
+
+	// Timer Count-down value
+	// (48 MHz / 1 MHz) = 48 ticks (0x30)
+	PIT_LDVAL3 = 0x30;
+	PIT_LDVAL2 = 0xFFFFFFFF;
+
+	// Chain Timers
+	PIT_TCTRL3 = PIT_TCTRL_CHN;
+
+	// Enable Timers
+	PIT_TCTRL3 |= PIT_TCTRL_TEN;
+	PIT_TCTRL2 |= PIT_TCTRL_TEN;
+}
+
+inline uint32_t timer_timestamp()
+{
+	return 0xFFFFFFFF - PIT_CVAL2;
+}
+
+void timer_query()
+{
+	info_msg("20.833 ns ticks: ");
+	printInt32( PIT_CVAL3 );
+	print(" us: ");
+	printInt32( 0xFFFFFFFF - PIT_CVAL2 );
+}
 
 
 
-// Main execution function
+// ------ Main ------
+
 int main()
 {
 	// Enable CLI
@@ -433,10 +822,24 @@ int main()
 	// Register Force Gauge CLI dictionary
 	CLI_registerDictionary( forceGaugeCLIDict, forceGaugeCLIDictName );
 
-	// Setup - TODO
+	// Setup
 	distance_setup();
 	limit_switch_setup();
 	motor_control_setup();
+	force_setup();
+	continuity_setup();
+	timer_setup();
+
+
+	// Enable Serial Force - Free Run
+	// XXX This is to prevent damage to the force gauge so it can at least force the motor to stop
+	//     if run by accident
+	UART0_C2 |= UART_C2_RIE; // Set UART Rx interrupt
+	// Queue serial read
+	UART0_D = 'D';
+	UART0_D = '\r';
+	Main_ForceCaptureMode |= ForceCaptureMode_FreeRun_Serial;
+
 
 	// Setup Modules
 	Output_setup();
@@ -449,196 +852,10 @@ int main()
 
 		// TODO
 	}
+}
 
-
+// TODO Removeme once implemented in Python
 #if 0
-	// Setup force gauge
-	forceSetup();
-
-	// Loop variables
-	uint32_t currentDistance = 0;
-	uint32_t    lastDistance = 0;
-	char     currentForce[40];
-	uint8_t  currentForceLen = 0;
-	uint8_t  startEndCount   = 0;
-
-	// Main loop
-	while ( 1 )
-	{
-		// Process CLI
-		process_cli();
-
-		// Only enter read loop if activated
-		if ( forceDistanceRead || --forceDistanceReadCount > 0 )
-		{
-			// - Query force -
-			// Write command to data register
-			//  NOTE: Imada only uses single byte commands, this makes it easy
-			//        Always followed by a '\r' CR
-			char outCmd[] = { 'D', '\r', 0x00 };
-			transmitUART0String( outCmd );
-
-
-			// - Read Distance -
-			currentDistance = readDistanceGauge();
-
-
-			// - Query Continuity -
-			continuityTest();
-
-
-			// - Read force -
-			// Read until a CR is read
-			while ( 1 )
-			{
-				currentForce[currentForceLen] = receiveUART0Char();
-
-				// Stop reading if the character was a CR
-				if ( currentForce[currentForceLen++] == '\r' )
-				{
-					currentForce[currentForceLen] = '\0'; // Cap string with a NULL
-					break;
-				}
-			}
-
-			// Scan Imada force string and remove units (ignore all ascii below '9')
-			char *strPtr = currentForce;
-			while ( *++strPtr <= '9' );
-			*strPtr = '\0';
-
-			// - Output data -
-			// If the distance has changed, output the data
-			if ( currentDistance != lastDistance || forceDistanceReadCount > 0 )
-			{
-				// Check to see if start/end marker has been reached
-				if ( startEndCount == 0 && currentDistance <= distanceStart )
-				{
-					print("::Start::" NL);
-					startEndCount++;
-				}
-				else if ( startEndCount == 1 && currentDistance >= distanceStart )
-				{
-					print("::End::" NL);
-					startEndCount = 0;
-				}
-
-				// Display the current force/distance pair
-				print("::");
-				dPrint( currentForce );
-				print(" gf:");
-				printInt32( ( currentDistance * 9921 ) / 1000 ); // Convert to um, see cliFunc_distRead
-				print(" um:");
-				printInt8( continuityState );
-				print("::" NL);
-			}
-
-			// Prepare for next iteration
-			lastDistance = currentDistance;
-			currentForceLen = 0;
-		}
-		else
-		{
-			// So consecutive reads will work
-			lastDistance = 0;
-		}
-	}
-#endif
-}
-
-#if 0
-// Send each character from the string (except the NULL), waiting until each character is sent before proceeding
-// NOTE: There is no delay after sending the last character
-//       If first character is NULL, it will be sent
-inline void transmitUART0String( char* str )
-{
-	// Loop through string
-	while ( *str != '\0' )
-	{
-		while( !( UART0_S1 & UART_S1_TC ) ); // Wait for dataword to transmit
-		UART0_D = *str++; // Send dataword (character)
-	}
-}
-
-// Wait until FIFO has a character (no timeout...)
-inline char receiveUART0Char()
-{
-	// Wait for a response (something to arrive in the FIFO)
-	while ( UART0_SFIFO & UART_SFIFO_RXEMPT );
-
-	// Read from RX FIFO
-	return UART0_D;
-}
-
-
-// Test continuity
-inline void continuityTest()
-{
-	// Make sure strobe is set high
-	GPIOD_PSOR |= (1<<5);
-
-	// Sample the sense
-	continuityState = GPIOD_PDIR & (1<<6) ? 1 : 0;
-}
-
-
-uint32_t readDistanceGauge()
-{
-	// Setup distance read parameters for iGaging Distance Scale
-	//       freq = 9kHz
-	// duty_cycle = 20%
-	// high_delay = (1/freq) *       (duty_cycle/100)
-	//  low_delay = (1/freq) * ((100-duty_cycle)/100)
-	uint8_t  bits       = 21; // 21 clock pulses, for 21 bits
-	uint32_t high_delay = 22; // Clock high time per pulse
-	uint32_t  low_delay = 89; // Clock low  time per pulse
-
-	// Data
-	uint32_t distInput = 0;
-
-	// Make sure clock is low initially
-	GPIOC_PCOR |= (1<<2); // Set Clock low
-
-	// Scan each of the bits
-	for ( uint8_t bit = 0; bit < bits; bit++ )
-	{
-		// Begin clock pulse
-		GPIOC_PSOR |= (1<<2); // Set Clock high
-
-		// Delay for duty cycle
-		delayMicroseconds( high_delay );
-
-		// End clock pulse
-		GPIOC_PCOR |= (1<<2); // Set Clock low
-
-		// Read Data Bit
-		distInput |= GPIOC_PDIR & (1<<1) ? (1 << bit) : 0;
-
-		// Delay for duty cycle
-		delayMicroseconds( low_delay );
-	}
-
-	return distInput;
-}
-
-
-// ----- Interrupt Functions -----
-
-
-
-// ----- CLI Command Functions -----
-
-void cliFunc_contRead( char* args )
-{
-	// Query Continuity
-	continuityTest();
-
-	// Display Continuity
-	print( NL );
-	info_msg("Continuity: ");
-	print( continuityState ? "High - 1" : "Low - 0" );
-}
-
-
 void cliFunc_distRead( char* args )
 {
 	// Parse number from argument
@@ -727,182 +944,150 @@ void cliFunc_stop( char* args )
 	motor_stop();
 }
 
+void cliFunc_stat( char* args )
+{
+	print( NL );
+
+	// Timestamp
+	printInt32( timer_timestamp() );
+
+	// Distance
+	print("|");
+	printInt16( Main_FreeRunData.distance );
+
+	// Force Serial
+	print("|");
+	// Query the serial interface
+	if ( !( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_Serial ) )
+	{
+		force_serial_cmd( 'D', (char*)Main_FreeRunData.force_serial, sizeof( Main_FreeRunData.force_serial ), 1000 );
+	}
+	dPrint( (char*)Main_FreeRunData.force_serial );
+
+	// Force ADC
+	print("|");
+	if ( !( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_ADC ) )
+	{
+		force_adc_read( (uint16_t*)&Main_FreeRunData.force_adc, 1000 );
+	}
+	printInt16( Main_FreeRunData.force_adc );
+
+	// Continuity/Sense
+	print("|");
+	if ( !( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_Continuity ) )
+	{
+		continuity_read( (uint8_t*)&Main_FreeRunData.continuity );
+	}
+	printInt8( Main_FreeRunData.continuity );
+
+	// Speed
+	print("|");
+	if ( !( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_Speed ) )
+	{
+		// TODO
+	}
+	printInt16( Main_FreeRunData.speed );
+
+	// Direction
+	print("|");
+	if ( !( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_Direction ) )
+	{
+		// TODO
+	}
+	printInt8( Main_FreeRunData.direction );
+}
+
+void cliFunc_zero( char* args )
+{
+	print( NL );
+	info_print("Zeroing...");
+
+	// Stop all actions
+	Main_ForceCaptureMode = ForceCaptureMode_OnRequest;
+
+	// Force Gauge
+	info_print("Force Gauge");
+	char commandOut[10];
+	force_serial_cmd( 'Z', commandOut, sizeof( commandOut ), 1000 );
+	if ( commandOut[0] != 'R' )
+	{
+		erro_print("Unsuccessful...");
+	}
+
+	// TODO Other
+
+	// Free-running data structure
+	Main_FreeRunData = (ForceCurveDataPoint){ 0 } ;
+
+	info_print("Zeroing Complete");
+}
+
 void cliFunc_free( char* args )
 {
-	// Set the forceDistanceRead to 1, which will read until start has passed twice
-	//forceDistanceRead = 1;
-}
-
-#if 0
-void imadaVerboseRead( char* cmd )
-{
-	// Write command to data register
-	//  NOTE: Imada only uses single byte commands, this makes it easy
-	//        Always followed by a '\r' CR
-	char outCmd[] = { *cmd, '\r', 0x00 };
-	transmitUART0String( outCmd );
-
-	// Prepare to print output
-	print( NL );
-	info_msg("Imada: ");
-	char inputChar[] = { 0x00, 0x00 };
-
-	// Read until a CR is read
-	while ( 1 )
-	{
-		inputChar[0] = receiveUART0Char();
-
-		// Stop reading if the character was a CR
-		if ( inputChar[0] == '\r' )
-			break;
-
-		// Print out the character
-		dPrint( inputChar );
-	}
-}
-
-
-void cliFunc_imadaComm( char* args )
-{
-	// Parse command from arguments
-	//  NOTE: Only first argument is used
+	char* curArgs;
 	char* arg1Ptr;
-	char* arg2Ptr;
-	argumentIsolation_cli( args, &arg1Ptr, &arg2Ptr );
+	char* arg2Ptr = args;
 
-	// Error out if no argument specified
-	if ( *arg1Ptr == '\0' )
+	// Process speed argument if given
+	curArgs = arg2Ptr;
+	CLI_argumentIsolation( curArgs, &arg1Ptr, &arg2Ptr );
+
+	// Check for special args
+	switch ( *arg1Ptr )
 	{
-		print( NL );
-		erro_print("No argument specified...");
+	case 'f':
+	case 'F':
+		UART0_C2 |= UART_C2_RIE; // Set UART Rx interrupt
+
+		// Queue serial read
+		UART0_D = 'D';
+		UART0_D = '\r';
+
+		Main_ForceCaptureMode = ForceCaptureMode_FreeRun_Full;
+		return;
+
+	// Default to off
+	case 'o':
+	case 'O':
+	default:
+		UART0_C2 &= ~(UART_C2_RIE); // Disable UART Rx interrupt
+
+		Main_ForceCaptureMode = ForceCaptureMode_OnRequest;
+		return;
+
+	case 'a':
+	case 'A':
+		Main_ForceCaptureMode ^= ForceCaptureMode_FreeRun_ADC;
+		return;
+
+	case 's':
+	case 'S':
+		UART0_C2 ^= UART_C2_RIE; // Toggle UART Rx interrupt
+
+		if ( UART0_C2 & UART_C2_RIE )
+		{
+			// Queue serial read
+			UART0_D = 'D';
+			UART0_D = '\r';
+		}
+
+		Main_ForceCaptureMode ^= ForceCaptureMode_FreeRun_Serial;
+		return;
+
+	case 'c':
+	case 'C':
+		Main_ForceCaptureMode ^= ForceCaptureMode_FreeRun_Continuity;
+		return;
+
+	case 'i':
+	case 'I':
+		Main_ForceCaptureMode ^= ForceCaptureMode_FreeRun_Direction;
+		return;
+
+	case 'p':
+	case 'P':
+		Main_ForceCaptureMode ^= ForceCaptureMode_FreeRun_Speed;
 		return;
 	}
-
-	imadaVerboseRead( arg1Ptr );
 }
-
-
-void cliFunc_gaugeHelp( char* args )
-{
-	print( NL
-"\033[1;32mForce Curve Gauge Help\033[0m" NL
-" \033[1;33mUsage Overview\033[0m" NL
-"  TODO" NL
-" \033[1;33mAdditional Command Details\033[0m" NL
-"  \033[1;35mdistRead\033[0m" NL
-"     Reads the current value from the distance gauge." NL
-"     If specified it will N repeated reads with a delay after each read. Useful for testing the distance gauge." NL
-"       e.g. \033[35mdistRead 250\033[0m" NL
-"  \033[1;35mfree\033[0m" NL
-"     Start free scanning force/distance reads." NL
-"     Will continue until the [start] distance point has been past twice." NL
-"  \033[1;35mimadaComm\033[0m" NL
-"     Sends a command to the Imada force gauge." NL
-"       e.g. \033[35mimadaComm D\033[0m" NL
-"     The commands supported by the gauge depends on the model. Listed below is for the DS2." NL
-"       K  Select g  units (default)" NL
-"       N  Select N  units" NL
-"       O  Select oz units" NL
-"       P  Select peak mode" NL
-"       T  Select real time mode (default)" NL
-"       Z  Zero out display/reading" NL
-"       Q  Turn off power" NL
-"       E  Read high/low set points" NL
-"       D  Read data from force gauge" NL
-"       E\033[35mHHHHLLLL\033[0m" NL
-"          Set the high/low setpoints, ignore decimals" NL
-"          \033[35mHHHH\033[0m is 4 digit high, \033[35mLLLL\033[0m is 4 digit low" NL
-"     Responses from the above commands." NL
-"       R  Command successful" NL
-"       E  Error/Invalid Command" NL
-"       E\033[35mHHHHLLLL\033[0m" NL
-"          Current high/low setpoints" NL
-"          \033[35mHHHH\033[0m is 4 digit high, \033[35mLLLL\033[0m is 4 digit low" NL
-"       \033[35m[value][units][mode]\033[0m" NL
-"          Data read response" NL
-"          \033[35m[value]\033[0m is force currently showing on the display (peak or realtime)" NL
-"          \033[35m[units]\033[0m is the configured force units" NL
-"          \033[35m[mode]\033[0m  is the current mode (peak or realtime)" NL
-"  \033[1;35mread\033[0m" NL
-"     Read the current force/distance value." NL
-"     If specified it will N repeated reads with a delay after each read." NL
-"       e.g. \033[35mread 125\033[0m" NL
-"  \033[1;35mstart\033[0m" NL
-"     Distance marker \033[35m[start]\033[0m for the start/end of a force curve measurement." NL
-"     While in free running mode, a special message is displayed when reaching the \033[35m[start]\033[0m point." NL
-"       \033[35m[start]\033[0m is defined by positioning the distance sensor at the position to start and running this command." NL
-"     The argument is an offset integer." NL
-		);
-}
-
-
-void cliFunc_read( char* args )
-{
-	// Parse number from argument
-	//  NOTE: Only first argument is used
-	char* arg1Ptr;
-	char* arg2Ptr;
-	argumentIsolation_cli( args, &arg1Ptr, &arg2Ptr );
-
-	// Convert the argument into an int
-	int read_count = decToInt( arg1Ptr ) + 1;
-
-	// If no argument specified, default to 1 read
-	if ( *arg1Ptr == '\0' )
-	{
-		read_count = 2;
-	}
-
-	// Set the overall read count to read_count
-	forceDistanceReadCount = read_count;
-}
-
-
-void cliFunc_start( char* args )
-{
-	// Parse number from argument
-	//  NOTE: Only first argument is used
-	char* arg1Ptr;
-	char* arg2Ptr;
-	argumentIsolation_cli( args, &arg1Ptr, &arg2Ptr );
-
-	// Convert the argument into an int
-	int offset = decToInt( arg1Ptr ) + 1;
-
-	// Read the current distance and set the new start/end position
-	distanceStart = readDistanceGauge() + offset;
-
-	print( NL );
-	info_msg("New start/end position: ");
-	printInt32( distanceStart - distanceOffset );
-}
-
-
-void cliFunc_stop( char* args )
-{
-	// Reset the forceDistanceRead and forceDistanceReadCount
-	forceDistanceRead = 0;
-	forceDistanceReadCount = 0;
-}
-
-
-void cliFunc_zeroForce( char* args )
-{
-	// Just use the imadaComm command sending the needed argument
-	char* commandArg = "Z";
-	imadaVerboseRead( commandArg );
-}
-
-
-void cliFunc_zeroPosition( char* args )
-{
-	// Read the current distance and set the new offset
-	distanceOffset = readDistanceGauge();
-
-	print( NL );
-	info_msg("New distance offset: ");
-	printInt32( distanceOffset );
-}
-
-#endif
 
