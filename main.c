@@ -74,12 +74,15 @@ typedef struct ForceCurveDataPoint {
 
 // ----- Function Declarations -----
 
+void cliFunc_buzz        ( char* args );
 void cliFunc_down        ( char* args );
 void cliFunc_free        ( char* args );
 void cliFunc_stat        ( char* args );
 void cliFunc_stop        ( char* args );
 void cliFunc_up          ( char* args );
 void cliFunc_zero        ( char* args );
+
+void buzzer_set( uint16_t val );
 
 void motor_stop();
 void motor_up_start();
@@ -90,14 +93,16 @@ void motor_down_start();
 // ----- Variables -----
 
 // Force Gauge command dictionary
-CLIDict_Entry( free,  "Toggle free-running modes: f - full on; o - full off; a - adc; s - serial" NL "\t\tc - continuity; i - direction; p - speed" );
+CLIDict_Entry( buzz,  "Set buzzer level, default to off" );
 CLIDict_Entry( down,  "Enable motor down signal" );
+CLIDict_Entry( free,  "Toggle free-running modes: f - full on; o - full off; a - adc; s - serial" NL "\t\tc - continuity; i - direction; p - speed" );
 CLIDict_Entry( stat,  "Current measurements, will query devices if not in free-running mode" );
 CLIDict_Entry( stop,  "Stop motor movement" );
 CLIDict_Entry( up,    "Enable motor up signal" );
 CLIDict_Entry( zero,  "Zero gauges" );
 
 CLIDict_Def( forceGaugeCLIDict, "Force Curve Gauge Commands" ) = {
+	CLIDict_Item( buzz ),
 	CLIDict_Item( down ),
 	CLIDict_Item( free ),
 	CLIDict_Item( stat ),
@@ -144,9 +149,7 @@ void pit0_isr()
 		{
 			uint32_t data = (SPI0_POPR << 16) | (SPI0_POPR << 8) | (SPI0_POPR << 1);
 			asm( "rbit %1,%0" : "=r" ( data ) : "r" ( data ) ); // Cortex M4 Instruction MSB to LSB
-			printInt32( ( data >> 8 ) & 0xFFFFF );
-			//printInt16( ( data >> 8 ) & 0xFFFF );
-			//printHex32( data >> 8 );
+			printHex32( data >> 8 );
 		}
 
 		// Flush Rx FIFO
@@ -280,6 +283,7 @@ inline void distance_setup()
 
 // TODO may need some sort of synchronization between full reads
 volatile uint8_t uart0_pos = 0;
+volatile uint8_t overforce = 0;
 void uart0_status_isr()
 {
 	// UART0_S1 must be read for the interrupt to be cleared
@@ -321,11 +325,22 @@ void uart0_status_isr()
 				case '7':
 				case '8':
 				case '9':
-					// STOP Motor
+					// STOP Motor, and make a noise
 					motor_up_start();
+					buzzer_set( 1000 );
+					overforce = 1;
 					warn_msg("Over force! - ");
 					dPrint( (char*)Main_FreeRunData.force_serial );
 					print( NL );
+					break;
+
+				default:
+					// Disable buzzer
+					if ( overforce )
+					{
+						overforce = 0;
+						buzzer_set( 4095 );
+					}
 					break;
 				}
 
@@ -559,6 +574,7 @@ uint8_t force_adc_read( uint16_t *data, uint16_t timeout )
 	if ( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_ADC )
 		return 0;
 
+	/*
 	// Set calibration
 	uint16_t sum;
 
@@ -575,9 +591,10 @@ uint8_t force_adc_read( uint16_t *data, uint16_t timeout )
 	printInt16( sum );
 #endif
 	__enable_irq(); // Re-enable interrupts
+	*/
 
 	// Channel
-	ADC0_SC1A = 23;
+	ADC0_SC1A = ADC_SC1_ADCH(0);
 
 	// Wait until the ADC is finished (or fails timeout)
 	uint32_t cur_time = systick_millis_count;
@@ -595,6 +612,34 @@ uint8_t force_adc_read( uint16_t *data, uint16_t timeout )
 
 	warn_print("ADC read timeout...");
 	return 0;
+}
+
+
+
+// ------ Buzzer ------
+
+void buzzer_setup()
+{
+	// DAC Setup
+	SIM_SCGC2 |= SIM_SCGC2_DAC0;
+
+	// Set DAC to max, disables Buzzer
+	*(int16_t *) &(DAC0_DAT0L) = 4095;
+
+	// Enable DAC
+	DAC0_C0 = DAC_C0_DACEN | DAC_C0_DACRFS; // 3.3V VDDA is DACREF_2
+}
+
+void buzzer_set( uint16_t val )
+{
+	if ( val <= 4095 )
+	{
+		*(int16_t *) &(DAC0_DAT0L) = val;
+	}
+	else
+	{
+		warn_print("DAC only supports values 0 to 4095");
+	}
 }
 
 
@@ -829,6 +874,7 @@ int main()
 	force_setup();
 	continuity_setup();
 	timer_setup();
+	buzzer_setup();
 
 
 	// Enable Serial Force - Free Run
@@ -1028,7 +1074,7 @@ void cliFunc_free( char* args )
 	char* arg1Ptr;
 	char* arg2Ptr = args;
 
-	// Process speed argument if given
+	// Process argument
 	curArgs = arg2Ptr;
 	CLI_argumentIsolation( curArgs, &arg1Ptr, &arg2Ptr );
 
@@ -1089,5 +1135,26 @@ void cliFunc_free( char* args )
 		Main_ForceCaptureMode ^= ForceCaptureMode_FreeRun_Speed;
 		return;
 	}
+}
+
+void cliFunc_buzz( char* args )
+{
+	char* curArgs;
+	char* arg1Ptr;
+	char* arg2Ptr = args;
+
+	// Process argument
+	curArgs = arg2Ptr;
+	CLI_argumentIsolation( curArgs, &arg1Ptr, &arg2Ptr );
+
+	// Get argument if set
+	uint16_t value = *arg1Ptr == '\0' ? 4095 : numToInt( arg1Ptr );
+
+	// Set buzzer
+	buzzer_set( value );
+
+	print( NL );
+	info_msg("Buzzer set to: ");
+	printInt16( value );
 }
 
