@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2015 by Jacob Alexander
+/* Copyright (C) 2011-2016 by Jacob Alexander
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -32,7 +32,7 @@
 // USB Includes
 #if defined(_mk20dx128_) || defined(_mk20dx128vlf5_) || defined(_mk20dx256_) || defined(_mk20dx256vlh7_)
 #include "arm/usb_dev.h"
-#include "arm/usb_rawhid.h"
+#include "arm/usb_rawio.h"
 #include "arm/usb_serial.h"
 #endif
 
@@ -132,28 +132,28 @@ inline int Output_putstr( char* str )
 	return usb_serial_write( str, count );
 }
 
-// USB Raw HID buffer available
-inline unsigned int Output_rawhid_availablechar()
+// USB RawIO buffer available
+inline unsigned int Output_rawio_availablechar()
 {
-	return usb_rawhid_available();
+	return usb_rawio_available();
 }
 
 
-// USB Raw HID get buffer
+// USB RawIO get buffer
 // XXX Must be a 64 byte buffer
-inline int Output_rawhid_getbuffer( char* buffer )
+inline int Output_rawio_getbuffer( char* buffer )
 {
-	// 1000 ms timeout
-	return usb_rawhid_recv( (void*)buffer, 1000 );
+	// No timeout, fail immediately
+	return usb_rawio_rx( (void*)buffer, 0 );
 }
 
 
-// USB Raw HID send buffer
+// USB RawIO send buffer
 // XXX Must be a 64 byte buffer
-inline int Output_rawhid_sendbuffer( char* buffer )
+inline int Output_rawio_sendbuffer( char* buffer )
 {
-	// 1000 ms timeout
-	return usb_rawhid_send( (void*)buffer, 1000 );
+	// No timeout, fail immediately
+	return usb_rawio_tx( (void*)buffer, 0 );
 }
 
 

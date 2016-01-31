@@ -1,7 +1,7 @@
 /* Teensyduino Core Library
  * http://www.pjrc.com/teensy/
  * Copyright (c) 2013 PJRC.COM, LLC.
- * Modified by Jacob Alexander (2013-2015)
+ * Modified by Jacob Alexander (2013-2016)
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -70,20 +70,18 @@
 #define CDC_STATUS_NAME         L"Virtual Serial Port - Status"
 #define CDC_DATA_NAME           L"Virtual Serial Port - Data"
 
-#define RAWHID_USAGE_PAGE       0xFFAB // recommended: 0xFF00 to 0xFFFF
-#define RAWHID_USAGE            0x0200 // recommended: 0x0100 to 0xFFFF
-#define RAWHID_INTERFACE        2 // RawHID
-#define RAWHID_TX_ENDPOINT      4
-#define RAWHID_TX_SIZE          64
-#define RAWHID_TX_INTERVAL      1
-#define RAWHID_RX_ENDPOINT      5
-#define RAWHID_RX_SIZE          64
-#define RAWHID_RX_INTERVAL      1
-#define RAWHID_NAME             L"API Interface"
+#define RAWIO_INTERFACE         2 // RawIO
+#define RAWIO_TX_ENDPOINT       4
+#define RAWIO_TX_SIZE           64
+#define RAWIO_TX_INTERVAL       1
+#define RAWIO_RX_ENDPOINT       5
+#define RAWIO_RX_SIZE           64
+#define RAWIO_RX_INTERVAL       1
+#define RAWIO_NAME              L"API Interface"
 
 #define SERIAL_CDC_DESC_OFFSET    (9 + 8)
-#define RAWHID_DESC_OFFSET        (9 + 8+9+5+5+4+5+7+9+7+7 + 9)
-#define CONFIG_DESC_SIZE          (9 + 8+9+5+5+4+5+7+9+7+7 + 9+9+7+7)
+#define RAWIO_DESC_OFFSET         (9 + 8+9+5+5+4+5+7+9+7+7 + 9)
+#define CONFIG_DESC_SIZE          (9 + 8+9+5+5+4+5+7+9+7+7 + 9+7+7)
 
 #define ENDPOINT1_CONFIG        ENDPOINT_TRANSIMIT_ONLY
 #define ENDPOINT2_CONFIG        ENDPOINT_RECEIVE_ONLY

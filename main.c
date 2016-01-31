@@ -62,13 +62,14 @@ typedef enum ForceCaptureMode {
 
 // Struct of all free-running datapoints
 typedef struct ForceCurveDataPoint {
+	uint32_t time;
+	uint32_t distance;
+	uint16_t speed;
+	uint16_t force_adc;
 	uint8_t  continuity;
 	uint8_t  direction;
-	uint32_t distance;
-	uint16_t force_adc;
 	char     force_serial[10];
-	uint16_t speed;
-} ForceCurveDataPoint;
+} __attribute__((packed)) ForceCurveDataPoint;
 
 
 
@@ -171,38 +172,6 @@ void pit0_isr()
 		// Reset bit position
 		distance_bit_pos = 0;
 #endif
-
-		/*
-		// Hide cursor, because annoying flashing
-		//print("\033[?25l\033[s");
-
-		// Display current stats on the cli
-		print("\033[1;50HTime:         "); // Top+1/middle, erase, display header
-		printInt32( timer_timestamp() );
-		print("\033[K");
-		print("\033[2;50HContinuity:   "); // Top+2/middle, erase, display header
-		printInt8( Main_FreeRunData.continuity );
-		print("\033[K");
-		print("\033[3;50HDirection:    "); // Top+3/middle, erase, display header
-		printInt8( Main_FreeRunData.direction );
-		print("\033[K");
-		print("\033[4;50HDistance:     "); // Top+4/middle, erase, display header
-		printInt32( Main_FreeRunData.distance );
-		print("\033[K");
-		print("\033[5;50HForce ADC:    "); // Top+5/middle, erase, display header
-		printInt16( Main_FreeRunData.force_adc );
-		print("\033[K");
-		print("\033[6;50HForce Serial: "); // Top+6/middle, erase, display header
-		dPrint( (char*)Main_FreeRunData.force_serial );
-		print("\033[K");
-		print("\033[7;50HSpeed:        "); // Top+7/middle, erase, display header
-		printInt16( Main_FreeRunData.speed );
-		print("\033[K");
-
-		// Restore cursor position and unhide
-		//print("\033[u");
-
-		*/
 
 		// Reset the PWM counter as we aren't quite sure where the internal counter is right now
 		FTM0_CNT = 0; // Reset counter
@@ -712,8 +681,12 @@ void portd_isr()
 			printInt32( distance_read_data );
 			print(NL);
 #endif
-			// Set the new distance
-			Main_FreeRunData.distance = distance_read_data;
+			// TODO fix 0 val bug
+			if ( distance_read_data != 0 )
+			{
+				// Set the new distance
+				Main_FreeRunData.distance = distance_read_data;
+			}
 
 			// Reset data
 			distance_read_data = 0;
@@ -894,6 +867,29 @@ void timer_query()
 
 
 
+// ------ RawIO Processing ------
+
+void rawio_process()
+{
+	// Retrieve RawIO buffer(s)
+	while ( Output_rawio_availablechar() )
+	{
+		info_print("RawIO Input Buffer: ");
+		char buf[65];
+		Output_rawio_getbuffer( buf );
+		buf[64] = '\0'; // Just in case
+		dPrint( buf );
+	}
+
+	// TODO setup modes
+
+	// Send current status
+	Main_FreeRunData.time = timer_timestamp();
+	Output_rawio_sendbuffer( (char*)&Main_FreeRunData );
+}
+
+
+
 // ------ Main ------
 
 int main()
@@ -933,7 +929,8 @@ int main()
 		// Process CLI
 		CLI_process();
 
-		// TODO
+		// RawIO Processing
+		rawio_process();
 	}
 }
 
@@ -1032,7 +1029,7 @@ void cliFunc_stat( char* args )
 	print( NL );
 
 	// Timestamp
-	printInt32( timer_timestamp() );
+	printInt32( Main_FreeRunData.time );
 
 	// Distance
 	print("|");

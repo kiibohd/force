@@ -1,6 +1,6 @@
 ###| CMake Kiibohd Controller USB Module |###
 #
-# Written by Jacob Alexander in 2011-2015 for the Kiibohd Controller
+# Written by Jacob Alexander in 2011-2016 for the Kiibohd Controller
 #
 # Released into the Public Domain
 #
@@ -19,7 +19,7 @@ if ( ${COMPILER_FAMILY} MATCHES "arm" )
 		arm/usb_desc.c
 		arm/usb_dev.c
 		arm/usb_mem.c
-		arm/usb_rawhid.c
+		arm/usb_rawio.c
 		arm/usb_serial.c
 	)
 
