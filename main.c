@@ -56,6 +56,12 @@ typedef enum ForceCaptureMode {
 	ForceCaptureMode_FreeRun_Full       = 0xFF,
 } ForceCaptureMode;
 
+typedef enum Direction {
+	Direction_None = 0,
+	Direction_Up   = 1,
+	Direction_Down = 2,
+} Direction;
+
 
 
 // ----- Structs -----
@@ -728,6 +734,9 @@ uint8_t continuity_read( uint8_t *data )
 
 void motor_stop()
 {
+	// Unset direction
+	Main_FreeRunData.direction = Direction_None;
+
 	// Pull high to stop motors
 	GPIOC_PSOR |= (1 << 8);
 	GPIOC_PSOR |= (1 << 9);
@@ -745,6 +754,9 @@ void motor_up_start()
 		return;
 	}
 
+	// Set direction
+	Main_FreeRunData.direction = Direction_Up;
+
 	GPIOC_PCOR |= (1 << 8);
 }
 
@@ -759,6 +771,9 @@ void motor_down_start()
 		erro_print("Lower limit switch triggered.");
 		return;
 	}
+
+	// Set direction
+	Main_FreeRunData.direction = Direction_Down;
 
 	GPIOC_PCOR |= (1 << 9);
 }
