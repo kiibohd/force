@@ -88,6 +88,8 @@ void motor_stop();
 void motor_up_start();
 void motor_down_start();
 
+uint32_t timer_timestamp();
+
 
 
 // ----- Variables -----
@@ -169,6 +171,38 @@ void pit0_isr()
 		// Reset bit position
 		distance_bit_pos = 0;
 #endif
+
+		/*
+		// Hide cursor, because annoying flashing
+		//print("\033[?25l\033[s");
+
+		// Display current stats on the cli
+		print("\033[1;50HTime:         "); // Top+1/middle, erase, display header
+		printInt32( timer_timestamp() );
+		print("\033[K");
+		print("\033[2;50HContinuity:   "); // Top+2/middle, erase, display header
+		printInt8( Main_FreeRunData.continuity );
+		print("\033[K");
+		print("\033[3;50HDirection:    "); // Top+3/middle, erase, display header
+		printInt8( Main_FreeRunData.direction );
+		print("\033[K");
+		print("\033[4;50HDistance:     "); // Top+4/middle, erase, display header
+		printInt32( Main_FreeRunData.distance );
+		print("\033[K");
+		print("\033[5;50HForce ADC:    "); // Top+5/middle, erase, display header
+		printInt16( Main_FreeRunData.force_adc );
+		print("\033[K");
+		print("\033[6;50HForce Serial: "); // Top+6/middle, erase, display header
+		dPrint( (char*)Main_FreeRunData.force_serial );
+		print("\033[K");
+		print("\033[7;50HSpeed:        "); // Top+7/middle, erase, display header
+		printInt16( Main_FreeRunData.speed );
+		print("\033[K");
+
+		// Restore cursor position and unhide
+		//print("\033[u");
+
+		*/
 
 		// Reset the PWM counter as we aren't quite sure where the internal counter is right now
 		FTM0_CNT = 0; // Reset counter
@@ -550,6 +584,9 @@ inline void force_setup()
 
 
 	// ---- ADC Setup ----
+
+	// Enable ADC clock
+	SIM_SCGC6 |= SIM_SCGC6_ADC0;
 
 	// Make sure calibration has stopped
 	ADC0_SC3 = 0;
