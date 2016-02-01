@@ -188,11 +188,11 @@ if __name__ == '__main__':
 	rawhid = KiibohdRawIO( debug_mode=False, timeout=1000 )
 	#rawhid = KiibohdRawIO( debug_mode=True, timeout=1000 )
 
-	ForceCurveDataPoint = namedtuple( 'ForceCurveDataPoint', 'time distance speed force_adc continuity direction force_serial' )
+	ForceCurveDataPoint = namedtuple( 'ForceCurveDataPoint', 'time distance speed force_adc force_adc_max continuity direction force_serial' )
 
 	while True:
 		data = rawhid.usb_read()
-		data_unp = unpack( '<LLHHBB10s', data[:24] )
+		data_unp = unpack( '<LLHHHBB10s', data[:26] )
 		data_unp_map = ForceCurveDataPoint._make( data_unp )
 		print( data_unp_map )
 		#time.sleep(0.001)

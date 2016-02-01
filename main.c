@@ -36,6 +36,11 @@
 
 // ----- Defines -----
 
+// Wider range of measurement values (up to 1kg absolute max, 600g is probably the safest...)
+#define VREF3_3
+// More accurate, will top out around 600g
+//#define VREF1_2
+
 
 
 // ----- Macros -----
@@ -47,11 +52,10 @@
 typedef enum ForceCaptureMode {
 	ForceCaptureMode_OnRequest          = 0x0,
 
-	ForceCaptureMode_FreeRun_ADC        = 0x1,
-	ForceCaptureMode_FreeRun_Serial     = 0x2,
-	ForceCaptureMode_FreeRun_Continuity = 0x4,
-	ForceCaptureMode_FreeRun_Direction  = 0x8,
-	ForceCaptureMode_FreeRun_Speed      = 0x10,
+	ForceCaptureMode_FreeRun_Serial     = 0x1,
+	ForceCaptureMode_FreeRun_Continuity = 0x2,
+	ForceCaptureMode_FreeRun_Direction  = 0x4,
+	ForceCaptureMode_FreeRun_Speed      = 0x8,
 
 	ForceCaptureMode_FreeRun_Full       = 0xFF,
 } ForceCaptureMode;
@@ -72,6 +76,7 @@ typedef struct ForceCurveDataPoint {
 	uint32_t distance;
 	uint16_t speed;
 	uint16_t force_adc;
+	uint16_t force_adc_max;
 	uint8_t  continuity;
 	uint8_t  direction;
 	char     force_serial[10];
@@ -104,7 +109,7 @@ uint32_t timer_timestamp();
 // Force Gauge command dictionary
 CLIDict_Entry( buzz,  "Set buzzer level, default to off" );
 CLIDict_Entry( down,  "Enable motor down signal" );
-CLIDict_Entry( free,  "Toggle free-running modes: f - full on; o - full off; a - adc; s - serial" NL "\t\tc - continuity; i - direction; p - speed" );
+CLIDict_Entry( free,  "Toggle free-running modes: f - full on; o - full off; s - serial" NL "\t\tc - continuity; i - direction; p - speed" );
 CLIDict_Entry( stat,  "Current measurements, will query devices if not in free-running mode" );
 CLIDict_Entry( stop,  "Stop motor movement" );
 CLIDict_Entry( up,    "Enable motor up signal" );
@@ -321,6 +326,7 @@ void uart0_status_isr()
 
 				uart0_pos = 0;
 
+				/* XXX Old force limiting, too slow for solid objects, use ADC
 				// Check the MSD to make sure we haven't exceeded 600g
 				// XXX The gauge is designed to work +/- 500g with 200% overload capacity
 				// To be safe, checking for 6,7,8,9 in the MSD (this is then 2nd character)
@@ -340,6 +346,8 @@ void uart0_status_isr()
 					overforce = 1;
 					warn_msg("Over force! - ");
 					dPrint( (char*)Main_FreeRunData.force_serial );
+					print(" ");
+					printInt16( Main_FreeRunData.force_adc );
 					print( NL );
 					break;
 
@@ -352,6 +360,7 @@ void uart0_status_isr()
 					}
 					break;
 				}
+				*/
 
 				// Queue the next command
 				UART0_D = 'D';
@@ -560,70 +569,121 @@ inline void force_setup()
 
 	// ---- ADC Setup ----
 
+	// Setup VREF to 1.2 V
+	VREF_TRM = 0x60;
+	VREF_SC = 0xE1; // Enable 1.2 volt ref
+
 	// Enable ADC clock
 	SIM_SCGC6 |= SIM_SCGC6_ADC0;
 
 	// Make sure calibration has stopped
 	ADC0_SC3 = 0;
 
-	// 16-bit
-	ADC0_CFG1 = ADC_CFG1_ADIV(1) + ADC_CFG1_MODE(3) + ADC_CFG1_ADLSMP;
-	ADC0_CFG2 = ADC_CFG2_MUXSEL + ADC_CFG2_ADLSTS(2);
+	// - CFG1 -
+	// ADIV:   (input)/2 divider
+	// ADICLK:   (bus)/2 divider
+	// MODE:   16-bit
+	// ADLSMP: Long sample
+	ADC0_CFG1 = ADC_CFG1_ADIV(1) | ADC_CFG1_ADICLK(1) | ADC_CFG1_MODE(3) | ADC_CFG1_ADLSMP;
 
-	// 1.2V internal Vref
+	// - CFG2 -
+	// ADLSTS: 6 extra ADCK cycles; 10 ADCK cycles total sample time
+	ADC0_CFG2 = ADC_CFG2_ADLSTS(2);
+
+	// - SC2 -
+#if defined(VREF3_3)
+	// REFSEL: Use default 3.3V reference
+	ADC0_SC2 = ADC_SC2_REFSEL(0);
+#elif defined(VREF1_2)
+	// REFSEL: Use 1.2V reference, see VREF setup above
 	ADC0_SC2 = ADC_SC2_REFSEL(1);
+#endif
 
+	// - SC3 -
+	// CAL:  Start calibration
+	// AVGE: Enable hardware averaging
+	// AVGS: 32 samples averaged
 	// 32 sample averaging
-	ADC0_SC3 = ADC_SC3_CAL + ADC_SC3_AVGE + ADC_SC3_AVGS(3);
+	ADC0_SC3 = ADC_SC3_CAL | ADC_SC3_AVGE | ADC_SC3_AVGS(3);
 
 	// Wait for calibration
 	while ( ADC0_SC3 & ADC_SC3_CAL );
-}
 
-uint8_t force_adc_read( uint16_t *data, uint16_t timeout )
-{
-	// Only use if free running adc mode is not enabled
-	if ( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_ADC )
-		return 0;
+	// Apply computed calibration offset
+	// XXX Note, for single-ended, only the plus side offsets have to be applied
+	//     For differential the minus side also has to be set as well
 
-	/*
+	__disable_irq(); // Disable interrupts while reading/setting offsets
+
 	// Set calibration
-	uint16_t sum;
-
-	// XXX Why is PJRC doing this? Is the self-calibration not good enough? -HaaTa
 	// ADC Plus-Side Gain Register
-	__disable_irq(); // Disable interrupts
-	sum = ADC0_CLPS + ADC0_CLP4 + ADC0_CLP3 + ADC0_CLP2 + ADC0_CLP1 + ADC0_CLP0;
+	// See Section 31.4.7 in the datasheet (mk20dx256vlh7) for details
+	uint16_t sum = ADC0_CLPS + ADC0_CLP4 + ADC0_CLP3 + ADC0_CLP2 + ADC0_CLP1 + ADC0_CLP0;
 	sum = (sum / 2) | 0x8000;
 	ADC0_PG = sum;
 
-#if ADC_DEBUG
-	print( NL );
-	info_msg("Calibration ADC0_PG (Plus-Side Gain Register)  set to: ");
-	printInt16( sum );
-#endif
 	__enable_irq(); // Re-enable interrupts
-	*/
 
-	// Channel
-	ADC0_SC1A = ADC_SC1_ADCH(0);
+	// Start ADC reading loop
+	// - SC1A -
+	// ADCH: Channel DAD0 (A10)
+	// AIEN: Enable interrupt
+	ADC0_SC1A = ADC_SC1_AIEN | ADC_SC1_ADCH(0);
 
-	// Wait until the ADC is finished (or fails timeout)
-	uint32_t cur_time = systick_millis_count;
-	while ( systick_millis_count - cur_time < timeout )
+	// Enable ADC0 IRQ Vector
+	NVIC_ENABLE_IRQ( IRQ_ADC0 );
+}
+
+void adc0_isr()
+{
+	// Check if ADC data is ready
+	if ( (ADC0_SC1A & ADC_SC1_COCO) )
 	{
-		if ( (ADC0_SC1A & ADC_SC1_COCO) )
+		Main_FreeRunData.force_adc = ADC0_RA;
+
+		// Check to see if force has exceeded limit
+#if defined(VREF1_2)
+		uint16_t limit = 50000;
+#elif defined(VREF3_3)
+		uint16_t limit = 20000;
+#else
+#error "Define a VREF, or else the load cell will die..."
+#endif
+
+		// Check for force limit
+		if ( Main_FreeRunData.force_adc > limit )
 		{
-			// Max of 16bits anyways
-			*data = (uint16_t)ADC0_RA;
-			return 1;
+			// Reverse motor, and make a noise
+			motor_up_start();
+			buzzer_set( 1000 );
+			overforce = 1;
+
+			warn_msg("Over force! - ");
+			dPrint( (char*)Main_FreeRunData.force_serial );
+			print(" ");
+			printInt16( Main_FreeRunData.force_adc );
+			print( NL );
+		}
+		else
+		{
+			// Disable buzzer
+			if ( overforce )
+			{
+				overforce = 0;
+				buzzer_set( 4095 );
+			}
 		}
 
-		yield(); // Service interrupts
+		// Set ADC Max value
+		if ( Main_FreeRunData.force_adc > Main_FreeRunData.force_adc_max )
+			Main_FreeRunData.force_adc_max = Main_FreeRunData.force_adc;
 	}
 
-	warn_print("ADC read timeout...");
-	return 0;
+	// Enable the next interrupt
+	// - SC1A -
+	// ADCH: Channel DAD0 (A10)
+	// AIEN: Enable interrupt
+	ADC0_SC1A = ADC_SC1_AIEN | ADC_SC1_ADCH(0);
 }
 
 
@@ -1061,10 +1121,6 @@ void cliFunc_stat( char* args )
 
 	// Force ADC
 	print("|");
-	if ( !( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_ADC ) )
-	{
-		force_adc_read( (uint16_t*)&Main_FreeRunData.force_adc, 1000 );
-	}
 	printInt16( Main_FreeRunData.force_adc );
 
 	// Continuity/Sense
@@ -1148,11 +1204,6 @@ void cliFunc_free( char* args )
 		UART0_C2 &= ~(UART_C2_RIE); // Disable UART Rx interrupt
 
 		Main_ForceCaptureMode = ForceCaptureMode_OnRequest;
-		return;
-
-	case 'a':
-	case 'A':
-		Main_ForceCaptureMode ^= ForceCaptureMode_FreeRun_ADC;
 		return;
 
 	case 's':
