@@ -53,9 +53,7 @@ typedef enum ForceCaptureMode {
 	ForceCaptureMode_OnRequest          = 0x0,
 
 	ForceCaptureMode_FreeRun_Serial     = 0x1,
-	ForceCaptureMode_FreeRun_Continuity = 0x2,
-	ForceCaptureMode_FreeRun_Direction  = 0x4,
-	ForceCaptureMode_FreeRun_Speed      = 0x8,
+	ForceCaptureMode_FreeRun_Speed      = 0x2,
 
 	ForceCaptureMode_FreeRun_Full       = 0xFF,
 } ForceCaptureMode;
@@ -73,14 +71,25 @@ typedef enum Direction {
 // Struct of all free-running datapoints
 typedef struct ForceCurveDataPoint {
 	uint32_t time;
-	uint32_t distance;
-	uint16_t speed;
-	uint16_t force_adc;
-	uint16_t force_adc_max;
-	uint8_t  continuity;
-	uint8_t  direction;
-	char     force_serial[10];
+	uint32_t distance_raw;     // Raw value, starting position is random on startup
+	uint32_t distance;         // Includes adjusted offset to prevent overflow
+	uint16_t speed;            // TODO
+	uint16_t force_adc;        // Current ADC force value
+	uint16_t force_adc_max;    // Max ADC force in the last iteration (resets between tests)
+	uint8_t  continuity;       // If hooked up, will indicate when switch is pressed
+	uint8_t  direction;        // Current moving direction (also indicates non-moving condition)
+	char     force_serial[10]; // Serial ADC data (calibrated), causes issues with ADC so not run very often
 } __attribute__((packed)) ForceCurveDataPoint;
+
+// Test State
+typedef struct ForceCurveTestState {
+	uint32_t distance_bottom; // Determined top start of test (TODO)
+	uint32_t distance_top;    // Determined bottom of press (required to run the motor faster with the force sensor)
+	uint16_t test_total;      // Total tests to run
+	uint16_t test_cur;        // Current test
+	uint16_t adc_origin;      // Initial force from the ADC (in case there is an offset to apply)
+	uint8_t  running;         // If a test if current running
+} ForceCurveTestState;
 
 
 
@@ -91,6 +100,7 @@ void cliFunc_down        ( char* args );
 void cliFunc_free        ( char* args );
 void cliFunc_stat        ( char* args );
 void cliFunc_stop        ( char* args );
+void cliFunc_test        ( char* args );
 void cliFunc_up          ( char* args );
 void cliFunc_zero        ( char* args );
 
@@ -109,9 +119,10 @@ uint32_t timer_timestamp();
 // Force Gauge command dictionary
 CLIDict_Entry( buzz,  "Set buzzer level, default to off" );
 CLIDict_Entry( down,  "Enable motor down signal" );
-CLIDict_Entry( free,  "Toggle free-running modes: f - full on; o - full off; s - serial" NL "\t\tc - continuity; i - direction; p - speed" );
+CLIDict_Entry( free,  "Toggle free-running modes: f - full on; o - full off; s - serial" NL "\t\tp - speed" );
 CLIDict_Entry( stat,  "Current measurements, will query devices if not in free-running mode" );
 CLIDict_Entry( stop,  "Stop motor movement" );
+CLIDict_Entry( test,  "Run switch test. First test determines how far the press goes (should be slow)" NL "\t\tSubsequent tests only go that far. Argument is # of tests. Default 1" );
 CLIDict_Entry( up,    "Enable motor up signal" );
 CLIDict_Entry( zero,  "Zero gauges" );
 
@@ -121,6 +132,7 @@ CLIDict_Def( forceGaugeCLIDict, "Force Curve Gauge Commands" ) = {
 	CLIDict_Item( free ),
 	CLIDict_Item( stat ),
 	CLIDict_Item( stop ),
+	CLIDict_Item( test ),
 	CLIDict_Item( up ),
 	CLIDict_Item( zero ),
 	{ 0, 0, 0 } // Null entry for dictionary end
@@ -133,14 +145,20 @@ ForceCaptureMode Main_ForceCaptureMode = ForceCaptureMode_OnRequest;
 // Free-running datastore
 volatile ForceCurveDataPoint Main_FreeRunData;
 
+// Test Data
+volatile ForceCurveTestState Main_TestState;
+
 
 
 // ------ Distance Measurement ------
 
 // PWM Input Interrupt
-volatile uint8_t  distance_pulses_on = 0;
-volatile uint8_t  distance_bit_pos = 0;
-volatile uint32_t distance_read_data = 0;
+volatile uint8_t  distance_pulses_on = 0;     // FTM PWM Pulse Clock for Distance Gauge
+volatile uint8_t  distance_bit_pos = 0;       // Bit-bang bit position of Distance Gauge
+volatile uint32_t distance_read_data = 0;     // Bit history of Distance Gauge read
+volatile uint8_t  distance_zero_next = 1;     // Signal to re-calibrate/zero the offset
+volatile  int32_t distance_offset = 0;        // Offset value to use
+volatile uint8_t  distance_offset_enable = 0; // Enable/disable offset depending on conditions
 void pit0_isr()
 {
 	// If pulses are on, turn off
@@ -234,11 +252,11 @@ inline void distance_setup()
 	PIT_MCR = 0x00; // Enable module, do not freeze timers in debug mode
 
 	// Timer Count-down value
-	// (48 MHz / 9 KHz) * 21 cycles = 112 000 ticks (0x1B580)
-	// (48 MHz / 9 KHz) * 22 cycles = 117 333 ticks (0x1CA55)
+	// (48 MHz / 9 KHz) * 21 cycles = 112 000 ticks (0x1B580) | Not long enough due to delays
+	//                    Halfway   = 114 667 ticks (0x1BFEB)
+	// (48 MHz / 9 KHz) * 22 cycles = 117 333 ticks (0x1CA55) | Sometimes too long due to delays
 	// (48 MHz / 9 KHz) * 23 cycles = 122 667 ticks (0x1DF2A)
-	//PIT_LDVAL0 = 0x1B580;
-	PIT_LDVAL0 = 0x1CA55;
+	PIT_LDVAL0 = 0x1BFEB;
 	//PIT_LDVAL0 = 0x2DC6C00; // Once per second
 
 	// Enable Timer, Enable interrupt
@@ -639,33 +657,71 @@ void adc0_isr()
 	// Check if ADC data is ready
 	if ( (ADC0_SC1A & ADC_SC1_COCO) )
 	{
+		//uint16_t prev_force = Main_FreeRunData.force_adc;
 		Main_FreeRunData.force_adc = ADC0_RA;
 
 		// Check to see if force has exceeded limit
 #if defined(VREF1_2)
-		uint16_t limit = 50000;
+		uint16_t limit = 60000;
 #elif defined(VREF3_3)
-		uint16_t limit = 20000;
+		uint16_t limit = 23000;
 #else
 #error "Define a VREF, or else the load cell will die..."
 #endif
 
 		// Check for force limit
+		Direction prev_dir = Main_FreeRunData.direction;
 		if ( Main_FreeRunData.force_adc > limit )
 		{
-			// Reverse motor, and make a noise
+			// Reverse motor first
 			motor_up_start();
-			buzzer_set( 1000 );
-			overforce = 1;
 
-			warn_msg("Over force! - ");
-			dPrint( (char*)Main_FreeRunData.force_serial );
-			print(" ");
-			printInt16( Main_FreeRunData.force_adc );
-			print( NL );
+			// Check if currently running a test
+			// On the first run we need to find the limit, so this is the signal to reverse directions
+			if ( Main_TestState.running )
+			{
+#define BOTTOM_LIMIT_OFFSET 5
+				// Set current distance - (offset) as bottom
+				if ( prev_dir == Direction_Down )
+				{
+					Main_TestState.distance_bottom = Main_FreeRunData.distance - BOTTOM_LIMIT_OFFSET;
+					info_msg("(Max Force) Setting min distance to '");
+					printInt32( Main_TestState.distance_bottom );
+					print("' ADC Force: ");
+					printInt16( Main_FreeRunData.force_adc );
+					print( NL );
+				}
+			}
+			else
+			{
+				// Make a noise if not a test
+				buzzer_set( 1000 );
+				overforce = 1;
+
+				warn_msg("Over force! - ");
+				dPrint( (char*)Main_FreeRunData.force_serial );
+				print(" ");
+				printInt16( Main_FreeRunData.force_adc );
+				print( NL );
+			}
 		}
 		else
 		{
+			/* XXX Not ideal, should probably keep track of data a different way for this -HaaTa
+			// Running a test, keep track of the min/max force for optimal distance start/stops
+			// Using distance limits is faster and better for the load sensor
+			if ( Main_TestState.running )
+			{
+				// Set max height using last useful force position
+				if ( prev_force == Main_TestState.adc_origin && Main_FreeRunData.force_adc > Main_TestState.adc_origin )
+				{
+#define TOP_LIMIT_OFFSET 5
+					// Set current distance + (offset) as top
+					Main_TestState.distance_top = Main_FreeRunData.distance + TOP_LIMIT_OFFSET;
+				}
+			}
+			*/
+
 			// Disable buzzer
 			if ( overforce )
 			{
@@ -747,11 +803,95 @@ void portd_isr()
 			printInt32( distance_read_data );
 			print(NL);
 #endif
-			// TODO fix 0 val bug
-			if ( distance_read_data != 0 )
+			// Check if we need to re-calibrate
+			if ( distance_zero_next )
 			{
-				// Set the new distance
-				Main_FreeRunData.distance = distance_read_data;
+#define DISTANCE_22BIT_MAX 0x1FFFFF
+				// Check for negative of positive offset to start
+				// Apply additive offset
+				if ( distance_read_data < DISTANCE_22BIT_MAX / 2 )
+				{
+					distance_offset = DISTANCE_22BIT_MAX;
+					distance_offset_enable = 1;
+				}
+				// Apply subtractive offset
+				// TODO there's a bug here -HaaTa
+				else
+				{
+					distance_offset = -DISTANCE_22BIT_MAX;
+					distance_offset_enable = 1;
+				}
+
+				// Finished calibrating offset
+				distance_zero_next = 0;
+			}
+
+			// Check if offset needs to be enabled/disabled
+			if (
+				( Main_FreeRunData.distance_raw > distance_read_data + DISTANCE_22BIT_MAX / 2 ) ||
+				( Main_FreeRunData.distance_raw + DISTANCE_22BIT_MAX / 2 < distance_read_data )
+			)
+			{
+				// Toggle
+				distance_offset_enable = !distance_offset_enable;
+			}
+
+			// Set the new distance
+			Main_FreeRunData.distance_raw = distance_read_data;
+			Main_FreeRunData.distance = distance_read_data + (distance_offset_enable ? distance_offset : 0 );
+
+			// Check current distance if this is a test to see if it's at a limit
+			if ( Main_TestState.running )
+			{
+				switch ( Main_FreeRunData.direction )
+				{
+				// Going up
+				case Direction_Up:
+					// Check if we're at/past the max height
+					if ( Main_FreeRunData.distance >= Main_TestState.distance_top )
+					{
+						// Increment current test and check to see if the test is finished
+						if ( ++Main_TestState.test_cur < Main_TestState.test_total )
+						{
+							// Display message
+							info_msg("(Top Height) Starting test '");
+							printInt16( Main_TestState.test_cur );
+							print("' Max adc force on prev: ");
+							printInt16( Main_FreeRunData.force_adc_max );
+							print( NL );
+
+							// Reset max adc
+							Main_FreeRunData.force_adc_max = 0;
+
+							// Start going down
+							motor_down_start();
+						}
+						else
+						{
+							// Display message
+							info_msg("(Top Height) Test Complete; Max adc force on prev: ");
+							printInt16( Main_FreeRunData.force_adc_max );
+							print( NL );
+
+							// Stop test
+							Main_TestState.running = 0;
+						}
+					}
+					break;
+
+				// Going down
+				case Direction_Down:
+					// Check if we're at/past the minimum height
+					if ( Main_FreeRunData.distance <= Main_TestState.distance_bottom )
+					{
+						// Display message
+						info_print("(Bottom Height) going back up.");
+
+						// Start going up
+						motor_up_start();
+					}
+					break;
+				}
 			}
 
 			// Reset data
@@ -780,10 +920,6 @@ void continuity_setup()
 
 uint8_t continuity_read( uint8_t *data )
 {
-	// Only use if free running continuity mode is not enabled
-	if ( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_Continuity )
-		return 0;
-
 	*data = GPIOD_PDIR & (1<<6) ? 1 : 0;
 	return 1;
 }
@@ -810,6 +946,7 @@ void motor_up_start()
 	// Then check if limit switch is enabled
 	if ( !( GPIOC_PDIR & (1 << 10) ) )
 	{
+		print( NL );
 		erro_print("Upper limit switch triggered.");
 		return;
 	}
@@ -828,6 +965,7 @@ void motor_down_start()
 	// Then check if limit switch is enabled
 	if ( !( GPIOE_PDIR & (1 << 0) ) )
 	{
+		print( NL );
 		erro_print("Lower limit switch triggered.");
 		return;
 	}
@@ -843,8 +981,54 @@ void portc_isr()
 	// Check each of the interrupts and clear them
 	if ( PORTC_PCR10 & PORT_PCR_ISF )
 	{
+		// Always stop first regardless
+		Direction prev_dir = Main_FreeRunData.direction;
 		motor_stop();
-		warn_print("Upper Limit Switch!");
+
+		// Check to see if running a test
+		if ( Main_TestState.running && prev_dir == Direction_Up )
+		{
+			// Increment current test and check to see if the test is finished
+			if ( Main_TestState.test_cur < Main_TestState.test_total )
+			{
+				// Display message
+				Main_TestState.test_cur++;
+				info_msg("(Upper Limit Switch) Starting test '");
+				printInt16( Main_TestState.test_cur );
+				print("' Max adc force on prev: ");
+				printInt16( Main_FreeRunData.force_adc_max );
+				print( NL );
+
+				// Reset max adc
+				Main_FreeRunData.force_adc_max = 0;
+
+				// Start going down
+				motor_down_start();
+			}
+			else
+			{
+				// Display message
+				info_msg("(Upper Limit Switch) Test Complete; Max adc force on prev: ");
+				printInt16( Main_FreeRunData.force_adc_max );
+				print( NL );
+
+				// Stop test
+				Main_TestState.running = 0;
+			}
+		}
+		// Normal limit switches
+		else
+		{
+			// Check if going down, no reason to fire limit switch
+			if ( prev_dir == Direction_Down )
+			{
+				motor_down_start();
+			}
+			else
+			{
+				warn_print("Upper Limit Switch!");
+			}
+		}
 		PORTC_PCR10 |= PORT_PCR_ISF;
 	}
 }
@@ -854,8 +1038,32 @@ void porte_isr()
 	// Check each of the interrupts and clear them
 	if ( PORTE_PCR0 & PORT_PCR_ISF )
 	{
+		// Always stop first regardless
+		Direction prev_dir = Main_FreeRunData.direction;
 		motor_stop();
-		warn_print("Lower Limit Switch!");
+
+		// Check to see if running a test
+		if ( Main_TestState.running && prev_dir == Direction_Down )
+		{
+			// Display message
+			info_print("(Lower Limit Switch) going back up.");
+
+			// Start going up
+			motor_up_start();
+		}
+		// Normal limit switches
+		else
+		{
+			// Check if going up, no reason to fire limit switch
+			if ( prev_dir == Direction_Up )
+			{
+				motor_up_start();
+			}
+			else
+			{
+				warn_print("Lower Limit Switch!");
+			}
+		}
 		PORTE_PCR0 |= PORT_PCR_ISF;
 	}
 }
@@ -965,6 +1173,30 @@ void rawio_process()
 
 
 
+// ------ Zeroing -----
+
+void zero()
+{
+	// Force Gauge
+	info_print("Force Gauge");
+	char commandOut[10];
+	force_serial_cmd( 'Z', commandOut, sizeof( commandOut ), 1000 );
+	if ( commandOut[0] != 'R' )
+	{
+		erro_print("Unsuccessful...");
+	}
+
+	// Distance
+	info_print("Distance");
+	distance_zero_next = 1;
+
+	// Free-running data structure
+	info_print("Data");
+	Main_FreeRunData = (ForceCurveDataPoint){ 0 } ;
+}
+
+
+
 // ------ Main ------
 
 int main()
@@ -985,6 +1217,7 @@ int main()
 	buzzer_setup();
 
 
+	/* XXX Causes ADC corruption, do not enable initially
 	// Enable Serial Force - Free Run
 	// XXX This is to prevent damage to the force gauge so it can at least force the motor to stop
 	//     if run by accident
@@ -993,6 +1226,7 @@ int main()
 	UART0_D = 'D';
 	UART0_D = '\r';
 	Main_ForceCaptureMode |= ForceCaptureMode_FreeRun_Serial;
+	*/
 
 
 	// Setup Modules
@@ -1097,6 +1331,13 @@ void cliFunc_down( char* args )
 void cliFunc_stop( char* args )
 {
 	motor_stop();
+
+	// Stop test if running
+	if ( Main_TestState.running )
+	{
+		info_print("Stopping test.");
+		Main_TestState.running = 0;
+	}
 }
 
 void cliFunc_stat( char* args )
@@ -1108,7 +1349,9 @@ void cliFunc_stat( char* args )
 
 	// Distance
 	print("|");
-	printInt16( Main_FreeRunData.distance );
+	printInt32( Main_FreeRunData.distance_raw );
+	print(":");
+	printInt32( Main_FreeRunData.distance );
 
 	// Force Serial
 	print("|");
@@ -1125,10 +1368,6 @@ void cliFunc_stat( char* args )
 
 	// Continuity/Sense
 	print("|");
-	if ( !( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_Continuity ) )
-	{
-		continuity_read( (uint8_t*)&Main_FreeRunData.continuity );
-	}
 	printInt8( Main_FreeRunData.continuity );
 
 	// Speed
@@ -1141,10 +1380,6 @@ void cliFunc_stat( char* args )
 
 	// Direction
 	print("|");
-	if ( !( Main_ForceCaptureMode & ForceCaptureMode_FreeRun_Direction ) )
-	{
-		// TODO
-	}
 	printInt8( Main_FreeRunData.direction );
 }
 
@@ -1153,22 +1388,7 @@ void cliFunc_zero( char* args )
 	print( NL );
 	info_print("Zeroing...");
 
-	// Stop all actions
-	Main_ForceCaptureMode = ForceCaptureMode_OnRequest;
-
-	// Force Gauge
-	info_print("Force Gauge");
-	char commandOut[10];
-	force_serial_cmd( 'Z', commandOut, sizeof( commandOut ), 1000 );
-	if ( commandOut[0] != 'R' )
-	{
-		erro_print("Unsuccessful...");
-	}
-
-	// TODO Other
-
-	// Free-running data structure
-	Main_FreeRunData = (ForceCurveDataPoint){ 0 } ;
+	zero();
 
 	info_print("Zeroing Complete");
 }
@@ -1220,16 +1440,6 @@ void cliFunc_free( char* args )
 		Main_ForceCaptureMode ^= ForceCaptureMode_FreeRun_Serial;
 		return;
 
-	case 'c':
-	case 'C':
-		Main_ForceCaptureMode ^= ForceCaptureMode_FreeRun_Continuity;
-		return;
-
-	case 'i':
-	case 'I':
-		Main_ForceCaptureMode ^= ForceCaptureMode_FreeRun_Direction;
-		return;
-
 	case 'p':
 	case 'P':
 		Main_ForceCaptureMode ^= ForceCaptureMode_FreeRun_Speed;
@@ -1256,5 +1466,48 @@ void cliFunc_buzz( char* args )
 	print( NL );
 	info_msg("Buzzer set to: ");
 	printInt16( value );
+}
+
+void cliFunc_test( char* args )
+{
+	print( NL );
+
+	// Check if a test is already running
+	if ( Main_TestState.running )
+	{
+		warn_print("Test is already running, use 'stop' command to stop test.");
+		return;
+	}
+
+	char* curArgs;
+	char* arg1Ptr;
+	char* arg2Ptr = args;
+
+	// Process argument
+	curArgs = arg2Ptr;
+	CLI_argumentIsolation( curArgs, &arg1Ptr, &arg2Ptr );
+
+	// Get argument if set
+	Main_TestState.test_total = *arg1Ptr == '\0' ? 1 : numToInt( arg1Ptr );
+
+	// Reset state
+	Main_TestState.test_cur = 1; // Starts on test 1
+	Main_TestState.distance_bottom = 0;
+	Main_TestState.distance_top = Main_FreeRunData.distance;
+	Main_TestState.adc_origin = Main_FreeRunData.force_adc;
+
+	// Reset max adc
+	Main_FreeRunData.force_adc_max = 0;
+
+	// Run tests
+	Main_TestState.running = 1;
+
+	// Msg
+	info_msg("Starting test with '");
+	printInt16( Main_TestState.test_total );
+	print("' iterations");
+
+	// Start motor downwards
+	motor_down_start();
 }
 

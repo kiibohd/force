@@ -182,18 +182,40 @@ class KiibohdRawIO:
 
 
 
+### Functions ###
+
+def reinit_read():
+	ForceCurveDataPoint = namedtuple( 'ForceCurveDataPoint', 'time distance_raw distance speed force_adc force_adc_max continuity direction force_serial' )
+
+	try:
+		rawhid = KiibohdRawIO( debug_mode=False, timeout=1000 )
+		#rawhid = KiibohdRawIO( debug_mode=True, timeout=1000 )
+	except ( usb.core.USBError, ValueError ):
+		# Just sleep, then we'll try again in a bit
+		time.sleep(1)
+		print(".", end='')
+		sys.stdout.flush()
+		return
+
+	try:
+		while True:
+			data = rawhid.usb_read()
+			data_unp = unpack( '<LLLHHHBB10s', data[:30] )
+			data_unp_map = ForceCurveDataPoint._make( data_unp )
+			print( data_unp_map )
+	except usb.core.USBError:
+		# Just sleep, then we'll try again in a bit
+		time.sleep(1)
+		print("|", end='')
+		sys.stdout.flush()
+		return
+
+
+
 ### Main ###
 
 if __name__ == '__main__':
-	rawhid = KiibohdRawIO( debug_mode=False, timeout=1000 )
-	#rawhid = KiibohdRawIO( debug_mode=True, timeout=1000 )
-
-	ForceCurveDataPoint = namedtuple( 'ForceCurveDataPoint', 'time distance speed force_adc force_adc_max continuity direction force_serial' )
-
+	# Constantly try to re-init
 	while True:
-		data = rawhid.usb_read()
-		data_unp = unpack( '<LLHHHBB10s', data[:26] )
-		data_unp_map = ForceCurveDataPoint._make( data_unp )
-		print( data_unp_map )
-		#time.sleep(0.001)
+		reinit_read()
 
