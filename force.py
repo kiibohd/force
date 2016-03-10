@@ -202,6 +202,7 @@ class KiibohdRawIO:
 	# Prevents ResourceBusy errors/hangs
 	def clean( self ):
 		usb.util.release_interface( self.device, self.interface )
+		usb.util.dispose_resources( self.device )
 
 	# Write data to the USB endpoint
 	# data - List of bytes to write
@@ -263,9 +264,7 @@ def reinit_read():
 		sys.stdout.flush()
 		return
 
-	# Do not write to file until recieving the signal to
 	write_file = False
-	line_data = []
 
 	try:
 		while True:
@@ -274,15 +273,19 @@ def reinit_read():
 
 			# Check if useful
 			if data_unp_map == "Starting Test/Calibration":
+				# Write file to disk
+				outfile = open( forcecurve_filename, 'w' )
 				write_file = True
 
 			# Write to file if allowed
 			if write_file:
-				line_data.append( data_unp_map )
+				outfile.write( "{0}\n".format( data_unp_map ) )
 			print( data_unp_map )
 
 			# Check if this was the last line
 			if data_unp_map == "Test Complete":
+				outfile.close()
+				write_file = False
 				break
 
 	except usb.core.USBError:
@@ -294,12 +297,6 @@ def reinit_read():
 		print("|", end='')
 		sys.stdout.flush()
 		return
-
-	# Write file to disk
-	outfile = open( forcecurve_filename, 'w' )
-	for line in line_data:
-		outfile.write( "{0}\n".format( line ) )
-	outfile.close()
 
 	# Cleanup
 	rawhid.clean()
