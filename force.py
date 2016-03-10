@@ -42,20 +42,45 @@
 
 ### Imports ###
 
-import binascii
-import time
-import usb.core # pyusb
-import sys
-
 from array       import array
 from collections import namedtuple
-from struct      import *
+from struct      import unpack
+
+import argparse
+import os
+import sys
+import time
+
+# pyusb
+import usb.core
+import usb.util
+
+
+
+# Print Decorator Variables
+ERROR = '\033[5;1;31mERROR\033[0m:'
+
+
+
+# Python Text Formatting Fixer...
+textFormatter_lookup = {
+	"usage: "            : "Usage: ",
+	"optional arguments" : "Optional Arguments",
+}
+
+def textFormatter_gettext( s ):
+	return textFormatter_lookup.get( s, s )
+
+argparse._ = textFormatter_gettext
 
 
 
 ### Classes ###
 
 class KiibohdRawIO:
+	"""
+		KiibohdRawIO
+	"""
 	def __init__( self, device_index=0, debug_mode=False, timeout=None ):
 		# Enumeration index of the USB device
 		# This matters if there is more than one GPIB to USB adapter plugged in
@@ -79,7 +104,7 @@ class KiibohdRawIO:
 				break
 
 		if self.debug_mode:
-			print (">>> DEVICE");
+			print (">>> DEVICE")
 			print ( self.device )
 
 		# No device found
@@ -90,7 +115,7 @@ class KiibohdRawIO:
 		self.cfg = self.device.get_active_configuration()
 
 		if self.debug_mode:
-			print (">>> CONFIG");
+			print (">>> CONFIG")
 			print ( self.cfg )
 
 		# Find the vendor-specific interface
@@ -107,8 +132,20 @@ class KiibohdRawIO:
 			raise ValueError('RawHID interface not found')
 
 		if self.debug_mode:
-			print (">>> INTERFACE");
+			print (">>> INTERFACE")
 			print ( self.interface )
+
+		# Make sure the driver hasn't been claimed already
+		if self.device.is_kernel_driver_active( self.interface.bInterfaceNumber ):
+			print ("Warning: Kernel driver captured this interface...")
+			try:
+				self.device.detach_kernel_driver( self.interface.bInterfaceNumber )
+			except usb.core.USBError as err:
+				sys.exit(
+					"Could not detatch kernel driver from interface({0}): {1}".format(
+						self.interface.bInterfaceNumber, str( err )
+					)
+				)
 
 		# Get read and write endpoints
 		for endpoint in self.interface.endpoints():
@@ -118,7 +155,7 @@ class KiibohdRawIO:
 				self.write_ep = endpoint
 
 		if self.debug_mode:
-			print (">>> ENDPOINTS");
+			print (">>> ENDPOINTS")
 			print ( self.read_ep )
 			print ( self.write_ep )
 
@@ -130,15 +167,16 @@ class KiibohdRawIO:
 
 	# Matcher for the USB device finding function
 	def _device_matcher( self, device ):
-		import usb.util
+		import usb.util as util
 		# Make sure that a Vendor Specific Interface is found in the configuration
 		# bInterfaceClass    0xff
 		# bInterfaceSubClass 0xff
 		# bInterfaceProtocol 0xff
 		for cfg in device:
-			if ( usb.util.find_descriptor( cfg, bInterfaceClass=0xFF ) is not None
-				and usb.util.find_descriptor( cfg, bInterfaceSubClass=0xFF ) is not None
-				and usb.util.find_descriptor( cfg, bInterfaceProtocol=0xFF ) is not None ):
+			if ( util.find_descriptor( cfg, bInterfaceClass=0xFF ) is not None
+				and util.find_descriptor( cfg, bInterfaceSubClass=0xFF ) is not None
+				and util.find_descriptor( cfg, bInterfaceProtocol=0xFF ) is not None
+			):
 				return True
 
 	# Locate all USB devices with the Kiibohd Force Id
@@ -158,6 +196,12 @@ class KiibohdRawIO:
 			raise ValueError('Cannot find any devices')
 
 		return self.devices
+
+	# Cleanup
+	# Makes sure the interface has been released
+	# Prevents ResourceBusy errors/hangs
+	def clean( self ):
+		usb.util.release_interface( self.device, self.interface )
 
 	# Write data to the USB endpoint
 	# data - List of bytes to write
@@ -184,9 +228,31 @@ class KiibohdRawIO:
 
 ### Functions ###
 
-def reinit_read():
-	ForceCurveDataPoint = namedtuple( 'ForceCurveDataPoint', 'time distance_raw distance speed force_adc force_adc_max continuity direction force_serial' )
+ForceCurveDataPoint = namedtuple(
+	'ForceCurveDataPoint',
+	'time distance_raw distance speed force_adc force_adc_max continuity direction force_serial'
+)
 
+ForceCurveCalibrationPoint = namedtuple(
+	'ForceCurveCalibrationPoint',
+	'distance force_adc force_serial'
+)
+
+forcecurve_filename = "unk.raw"
+
+def decode_data( data ):
+	# Determine type of data
+	if data[0] == ord('D'):
+		data_unp = unpack( '<LLLHHHBB10s', data[1:31] )
+		return ForceCurveDataPoint._make( data_unp )
+	elif data[0] == ord('C'):
+		data_unp = unpack( '<LH10s', data[1:17] )
+		return ForceCurveCalibrationPoint._make( data_unp )
+	elif data[0] == ord('M'):
+		# Find null terminated portion (or entire)
+		return bytearray( data[1:] ).split( b'\x00' )[0].decode("utf-8")
+
+def reinit_read():
 	try:
 		rawhid = KiibohdRawIO( debug_mode=False, timeout=1000 )
 		#rawhid = KiibohdRawIO( debug_mode=True, timeout=1000 )
@@ -197,25 +263,99 @@ def reinit_read():
 		sys.stdout.flush()
 		return
 
+	# Do not write to file until recieving the signal to
+	write_file = False
+	line_data = []
+
 	try:
 		while True:
-			data = rawhid.usb_read()
-			data_unp = unpack( '<LLLHHHBB10s', data[:30] )
-			data_unp_map = ForceCurveDataPoint._make( data_unp )
+			# Decode data
+			data_unp_map = decode_data( rawhid.usb_read() )
+
+			# Check if useful
+			if data_unp_map == "Starting Test/Calibration":
+				write_file = True
+
+			# Write to file if allowed
+			if write_file:
+				line_data.append( data_unp_map )
 			print( data_unp_map )
+
+			# Check if this was the last line
+			if data_unp_map == "Test Complete":
+				break
+
 	except usb.core.USBError:
+		# Cleanup first
+		rawhid.clean()
+
 		# Just sleep, then we'll try again in a bit
 		time.sleep(1)
 		print("|", end='')
 		sys.stdout.flush()
 		return
 
+	# Write file to disk
+	outfile = open( forcecurve_filename, 'w' )
+	for line in line_data:
+		outfile.write( "{0}\n".format( line ) )
+	outfile.close()
+
+	# Cleanup
+	rawhid.clean()
+	sys.exit( 0 )
+
+
+
+### Argument Processing ###
+
+def processCommandLineArgs():
+	# Setup argument processor
+	pArgs = argparse.ArgumentParser(
+		usage="%(prog)s [options] <test name>",
+		description="This script records the data from a force gauge test and outputs it as a .raw file.\n"
+		"Only data from the test will be recorded to the file, free running data will not be recorded.\n"
+		"Once the test completes this script will save the file and exit.",
+		epilog="Example: {0} switch_test1".format( os.path.basename( sys.argv[0] ) ),
+		formatter_class=argparse.RawTextHelpFormatter,
+		add_help=False,
+	)
+
+	# Positional Arguments
+	pArgs.add_argument( 'test_name', help=argparse.SUPPRESS ) # Suppressed help output
+
+	# Optional Arguments
+	pArgs.add_argument( '-h', '--help', action="help",
+		help="This message."
+	)
+
+	# Process Arguments
+	args = pArgs.parse_args()
+
+	# Parameters
+	test_filename = "{0}.raw".format( args.test_name )
+
+	# Check file existance, and rename if necessary
+	counter = 1
+	while os.path.isfile( test_filename ):
+		test_filename = "{0}-{1}.raw".format( args.test_name, counter )
+		counter += 1
+
+	global forcecurve_filename
+	forcecurve_filename = test_filename
+
 
 
 ### Main ###
 
 if __name__ == '__main__':
+	# Process args
+	processCommandLineArgs()
+
 	# Constantly try to re-init
 	while True:
 		reinit_read()
+
+	# Successful Execution
+	sys.exit( 0 )
 

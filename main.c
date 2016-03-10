@@ -41,6 +41,9 @@
 // More accurate, will top out around 600g
 //#define VREF1_2
 
+// Force ADC Voltage Offset Default
+#define ADC_FORCE_OFFSET_DEFAULT 470
+
 
 
 // ----- Macros -----
@@ -64,12 +67,20 @@ typedef enum Direction {
 	Direction_Down = 2,
 } Direction;
 
+typedef enum OutputMode {
+	OutputMode_Free        = 0,
+	OutputMode_Stop        = 1,
+	OutputMode_Single_Done = 2,
+	OutputMode_Single_Next = 3,
+} OutputMode;
+
 
 
 // ----- Structs -----
 
 // Struct of all free-running datapoints
 typedef struct ForceCurveDataPoint {
+	char     marker;           // Set to 'D' for data
 	uint32_t time;
 	uint32_t distance_raw;     // Raw value, starting position is random on startup
 	uint32_t distance;         // Includes adjusted offset to prevent overflow
@@ -91,11 +102,43 @@ typedef struct ForceCurveTestState {
 	uint8_t  running;         // If a test if current running
 } ForceCurveTestState;
 
+// Calibration Setup
+typedef struct ForceCurveCalibration {
+	// Calibration Distance
+	// This is in caliper ticks
+	// As per http://www.shumatech.com/web/21bit_protocol?page=0,1
+	// 21 bits is 2560 CPI (counts per inch) (C/inch)
+	// 1 inch is 25.4 mm
+	// 2560 / 25.4 = 100.7874016... CPMM (C/mm)
+	// Or
+	// 1 count is 1/2560 = 0.000390625... inches
+	// 1 count is (1/2560) * 25.4 = 0.00992187500000000 mm = 9.92187500000000 um = 9921.87500000000 nm
+	// i.e. 40 ~= 0.4 mm
+	uint32_t caldist;
+
+	// Last calibration position
+	uint32_t caldist_last;
+
+	// Next "safe" distance point to be used as calibration point
+	uint8_t caldist_next;
+
+	// Direction saved state for restart
+	Direction direction;
+
+	// Measurements
+	char     marker;           // Set to 'C' for calibration
+	uint32_t distance;         // Includes adjusted offset to prevent overflow
+	uint16_t force_adc;        // Current ADC force value
+	char     force_serial[10]; // Serial ADC data (calibrated)
+} __attribute__((packed)) ForceCurveCalibration;
+
 
 
 // ----- Function Declarations -----
 
 void cliFunc_buzz        ( char* args );
+void cliFunc_caladc      ( char* args );
+void cliFunc_caldist     ( char* args );
 void cliFunc_down        ( char* args );
 void cliFunc_free        ( char* args );
 void cliFunc_stat        ( char* args );
@@ -104,7 +147,7 @@ void cliFunc_test        ( char* args );
 void cliFunc_up          ( char* args );
 void cliFunc_zero        ( char* args );
 
-void buzzer_set( uint16_t val );
+void buzzer_set( uint32_t val );
 
 void motor_stop();
 void motor_up_start();
@@ -117,17 +160,21 @@ uint32_t timer_timestamp();
 // ----- Variables -----
 
 // Force Gauge command dictionary
-CLIDict_Entry( buzz,  "Set buzzer level, default to off" );
-CLIDict_Entry( down,  "Enable motor down signal" );
-CLIDict_Entry( free,  "Toggle free-running modes: f - full on; o - full off; s - serial" NL "\t\tp - speed" );
-CLIDict_Entry( stat,  "Current measurements, will query devices if not in free-running mode" );
-CLIDict_Entry( stop,  "Stop motor movement" );
-CLIDict_Entry( test,  "Run switch test. First test determines how far the press goes (should be slow)" NL "\t\tSubsequent tests only go that far. Argument is # of tests. Default 1" );
-CLIDict_Entry( up,    "Enable motor up signal" );
-CLIDict_Entry( zero,  "Zero gauges" );
+CLIDict_Entry( buzz,    "Set buzzer level, default to off" );
+CLIDict_Entry( caladc,  "Set the force adc reference offset: 0 - 4096" );
+CLIDict_Entry( caldist, "Set calibration point distance" );
+CLIDict_Entry( down,    "Enable motor down signal" );
+CLIDict_Entry( free,    "Toggle free-running modes: f - full on; o - full off; s - serial" NL "\t\tp - speed" );
+CLIDict_Entry( stat,    "Current measurements, will query devices if not in free-running mode" );
+CLIDict_Entry( stop,    "Stop motor movement" );
+CLIDict_Entry( test,    "Run switch test. First iteration does the calibration measurements (should be slow)" NL "\t\tSubsequent tests only go that far. Argument is # of tests. Default 2" );
+CLIDict_Entry( up,      "Enable motor up signal" );
+CLIDict_Entry( zero,    "Zero gauges" );
 
 CLIDict_Def( forceGaugeCLIDict, "Force Curve Gauge Commands" ) = {
 	CLIDict_Item( buzz ),
+	CLIDict_Item( caladc ),
+	CLIDict_Item( caldist ),
 	CLIDict_Item( down ),
 	CLIDict_Item( free ),
 	CLIDict_Item( stat ),
@@ -147,6 +194,16 @@ volatile ForceCurveDataPoint Main_FreeRunData;
 
 // Test Data
 volatile ForceCurveTestState Main_TestState;
+
+// Rawio output state
+volatile OutputMode Main_OutputMode;
+
+// Rawio pending status pointer, only processes up to the first 64 bytes
+// If not 0/NULL, must point to a null terminated string
+volatile char* Main_rawio_pending_status_str = 0;
+
+// Calibration setup state
+volatile ForceCurveCalibration Main_Calibration;
 
 
 
@@ -307,6 +364,12 @@ inline void distance_setup()
 	// Set PORTD interrupt to 3rd highest priority
 	NVIC_SET_PRIORITY( IRQ_PORTD, 2 );
 #endif
+
+	// Set default calibration distance of ~0.4 mm
+	Main_Calibration.caldist = 40;
+	Main_Calibration.caldist_next = 0;
+	Main_Calibration.marker = 'C';
+	Main_FreeRunData.marker = 'D';
 }
 
 
@@ -343,42 +406,6 @@ void uart0_status_isr()
 				Main_FreeRunData.force_serial[uart0_pos - 1] = 0x00;
 
 				uart0_pos = 0;
-
-				/* XXX Old force limiting, too slow for solid objects, use ADC
-				// Check the MSD to make sure we haven't exceeded 600g
-				// XXX The gauge is designed to work +/- 500g with 200% overload capacity
-				// To be safe, checking for 6,7,8,9 in the MSD (this is then 2nd character)
-				// Format Example +123.4KTO
-				// This is not a full string comparison because this needs to be detected extremely quickly in case of problems
-				switch ( Main_FreeRunData.force_serial[1] )
-				{
-				case '4':
-				case '5':
-				case '6':
-				case '7':
-				case '8':
-				case '9':
-					// STOP Motor, and make a noise
-					motor_up_start();
-					buzzer_set( 1000 );
-					overforce = 1;
-					warn_msg("Over force! - ");
-					dPrint( (char*)Main_FreeRunData.force_serial );
-					print(" ");
-					printInt16( Main_FreeRunData.force_adc );
-					print( NL );
-					break;
-
-				default:
-					// Disable buzzer
-					if ( overforce )
-					{
-						overforce = 0;
-						buzzer_set( 4095 );
-					}
-					break;
-				}
-				*/
 
 				// Queue the next command
 				UART0_D = 'D';
@@ -695,7 +722,7 @@ void adc0_isr()
 			else
 			{
 				// Make a noise if not a test
-				buzzer_set( 1000 );
+				buzzer_set( 16000 );
 				overforce = 1;
 
 				warn_msg("Over force! - ");
@@ -726,13 +753,20 @@ void adc0_isr()
 			if ( overforce )
 			{
 				overforce = 0;
-				buzzer_set( 4095 );
+				buzzer_set( 0xFFFF );
 			}
 		}
 
 		// Set ADC Max value
 		if ( Main_FreeRunData.force_adc > Main_FreeRunData.force_adc_max )
 			Main_FreeRunData.force_adc_max = Main_FreeRunData.force_adc;
+
+		// Calibration check, only after distance recorded
+		if ( Main_TestState.running == 1 && Main_Calibration.caldist_next == 2 )
+		{
+			Main_Calibration.force_adc = Main_FreeRunData.force_adc;
+			Main_Calibration.caldist_next = 3;
+		}
 	}
 
 	// Enable the next interrupt
@@ -743,22 +777,22 @@ void adc0_isr()
 }
 
 
+// ------ Force ADC Voltage Offset Reference ------
 
-// ------ Buzzer ------
-
-void buzzer_setup()
+void adc_offset_setup()
 {
 	// DAC Setup
 	SIM_SCGC2 |= SIM_SCGC2_DAC0;
 
-	// Set DAC to max, disables Buzzer
-	*(int16_t *) &(DAC0_DAT0L) = 4095;
+	// Set DAC to default offset
+	*(int16_t *) &(DAC0_DAT0L) = ADC_FORCE_OFFSET_DEFAULT;
 
 	// Enable DAC
-	DAC0_C0 = DAC_C0_DACEN | DAC_C0_DACRFS; // 3.3V VDDA is DACREF_2
+	DAC0_C0 = DAC_C0_DACEN; // 1.2V VREF_OUT is DACREF_1
+	//DAC0_C0 = DAC_C0_DACEN | DAC_C0_DACRFS; // 3.3V VDDA is DACREF_2
 }
 
-void buzzer_set( uint16_t val )
+void adc_offset_set( uint16_t val )
 {
 	if ( val <= 4095 )
 	{
@@ -767,6 +801,45 @@ void buzzer_set( uint16_t val )
 	else
 	{
 		warn_print("DAC only supports values 0 to 4095");
+	}
+}
+
+
+
+// ------ Buzzer ------
+
+void buzzer_setup()
+{
+	// Setup PWM source
+	SIM_SCGC6 |= SIM_SCGC6_FTM1;
+
+	// Disable write protect and allow access to all the registers
+	FTM1_CNT = 0; // Reset counter
+
+	// Set FTM to PWM output - Edge Aligned, High-true pulses
+	FTM1_C0SC = 0x28; // MSnB:MSnA = 10, ELSnB:ELSnA = 01
+
+	// System clock, /w prescalar setting of 0
+	FTM1_SC = FTM_SC_CLKS(1) | FTM_SC_PS(0);
+
+	// PWM Period
+	// 16-bit maximum
+	FTM1_MOD = 0xFFFF;
+
+	// Default buzzer value, set to max (disables buzzer)
+	FTM1_C0V = 0xFFFF;
+	PORTA_PCR12 = PORT_PCR_SRE | PORT_PCR_DSE | PORT_PCR_MUX(4) | PORT_PCR_PE;
+}
+
+void buzzer_set( uint32_t val )
+{
+	if ( val <= 0xFFFF )
+	{
+		FTM0_C7V = val;
+	}
+	else
+	{
+		warn_print("Buzzer only supports values 0 to 65535");
 	}
 }
 
@@ -840,6 +913,9 @@ void portd_isr()
 			Main_FreeRunData.distance_raw = distance_read_data;
 			Main_FreeRunData.distance = distance_read_data + (distance_offset_enable ? distance_offset : 0 );
 
+			// Only stop during calibration if the direction does not change
+			uint8_t direction_change = 0;
+
 			// Check current distance if this is a test to see if it's at a limit
 			if ( Main_TestState.running )
 			{
@@ -851,7 +927,7 @@ void portd_isr()
 					if ( Main_FreeRunData.distance >= Main_TestState.distance_top )
 					{
 						// Increment current test and check to see if the test is finished
-						if ( ++Main_TestState.test_cur < Main_TestState.test_total )
+						if ( Main_TestState.test_cur++ < Main_TestState.test_total )
 						{
 							// Display message
 							info_msg("(Top Height) Starting test '");
@@ -859,12 +935,22 @@ void portd_isr()
 							print("' Max adc force on prev: ");
 							printInt16( Main_FreeRunData.force_adc_max );
 							print( NL );
+							Main_rawio_pending_status_str = "MNext Test Starting";
+
+							// Finish calibration test
+							if ( Main_TestState.test_cur == 2 )
+							{
+								Main_OutputMode = OutputMode_Free;
+							}
 
 							// Reset max adc
 							Main_FreeRunData.force_adc_max = 0;
 
 							// Start going down
 							motor_down_start();
+
+							// Don't do calibration on this iteration
+							direction_change = 1;
 						}
 						else
 						{
@@ -872,9 +958,14 @@ void portd_isr()
 							info_msg("(Top Height) Test Complete; Max adc force on prev: ");
 							printInt16( Main_FreeRunData.force_adc_max );
 							print( NL );
+							Main_rawio_pending_status_str = "MTest Complete";
 
 							// Stop test
 							Main_TestState.running = 0;
+
+							// Stop motor
+							motor_stop();
+							Main_Calibration.direction = Direction_None;
 						}
 					}
 					break;
@@ -889,8 +980,44 @@ void portd_isr()
 
 						// Start going up
 						motor_up_start();
+
+						// Don't do calibration on this iteration
+						direction_change = 1;
 					}
 					break;
+				}
+
+				// Calibration check
+				if ( !direction_change && Main_TestState.test_cur == 1 )
+				{
+					// Check to see if we can start a calibration step
+					if ( Main_Calibration.caldist_next )
+					{
+						if ( Main_Calibration.caldist_next == 1 )
+						{
+							Main_Calibration.distance = Main_FreeRunData.distance;
+							Main_Calibration.caldist_next = 2;
+						}
+					}
+
+					// Check to see if we need to stop at the next distance interval (calibration mode)
+					else if ( (
+						// Up
+						Main_FreeRunData.distance > Main_Calibration.caldist_last &&
+						Main_Calibration.caldist + Main_Calibration.caldist_last > Main_FreeRunData.distance
+					) || (
+						// Down
+						Main_FreeRunData.distance < Main_Calibration.caldist_last &&
+						Main_Calibration.caldist_last - Main_Calibration.caldist > Main_FreeRunData.distance
+					) )
+					{
+						// Record current movement state
+						Main_Calibration.direction = Main_FreeRunData.direction;
+						Main_Calibration.caldist_next = 1;
+
+						// Stop motor
+						motor_stop();
+					}
 				}
 			}
 
@@ -1155,6 +1282,7 @@ void timer_query()
 void rawio_process()
 {
 	// Retrieve RawIO buffer(s)
+	// TODO Implement controls?
 	while ( Output_rawio_availablechar() )
 	{
 		info_print("RawIO Input Buffer: ");
@@ -1164,11 +1292,61 @@ void rawio_process()
 		dPrint( buf );
 	}
 
-	// TODO setup modes
+	// Flush pending status buffer
+	if ( Main_rawio_pending_status_str != 0 )
+	{
+		// Send str over USB rawio
+		Output_rawio_sendbuffer( (char*)Main_rawio_pending_status_str );
 
-	// Send current status
+		// Clear buffer
+		Main_rawio_pending_status_str = 0;
+	}
 	Main_FreeRunData.time = timer_timestamp();
-	Output_rawio_sendbuffer( (char*)&Main_FreeRunData );
+
+	// Check if we can enable single shot output for calibration data
+	if ( Main_Calibration.caldist_next == 4 )
+	{
+		Main_Calibration.caldist_next = 0;
+		Main_OutputMode = OutputMode_Single_Next;
+	}
+
+	// Output modes
+	// Rawio output is controlled by the current mode
+	// Some modes only want status on demand (calibration)
+	// Other modes update the buffer as fast as possible
+	// Send current status
+	switch ( Main_OutputMode )
+	{
+	case OutputMode_Single_Next:
+		// Single pulse (until re-armed)
+		Output_rawio_sendbuffer( (char*)&Main_Calibration.marker );
+		Main_OutputMode = OutputMode_Single_Done;
+
+		// Restart motor movement
+		switch ( Main_Calibration.direction )
+		{
+		case Direction_Up:
+			motor_up_start();
+			break;
+
+		case Direction_Down:
+			motor_down_start();
+			break;
+
+		default:
+			break;
+		}
+		break;
+
+	case OutputMode_Free:
+		Output_rawio_sendbuffer( (char*)&Main_FreeRunData );
+		break;
+
+	case OutputMode_Single_Done:
+	case OutputMode_Stop:
+	default:
+		break;
+	}
 }
 
 
@@ -1193,6 +1371,11 @@ void zero()
 	// Free-running data structure
 	info_print("Data");
 	Main_FreeRunData = (ForceCurveDataPoint){ 0 } ;
+
+	Main_FreeRunData.marker = 'D';
+	Main_Calibration.marker = 'C';
+	Main_Calibration.caldist_next = 0;
+	Main_Calibration.direction = Direction_None;
 }
 
 
@@ -1208,6 +1391,7 @@ int main()
 	CLI_registerDictionary( forceGaugeCLIDict, forceGaugeCLIDictName );
 
 	// Setup
+	adc_offset_setup();
 	distance_setup();
 	limit_switch_setup();
 	motor_control_setup();
@@ -1216,21 +1400,14 @@ int main()
 	timer_setup();
 	buzzer_setup();
 
-
-	/* XXX Causes ADC corruption, do not enable initially
-	// Enable Serial Force - Free Run
-	// XXX This is to prevent damage to the force gauge so it can at least force the motor to stop
-	//     if run by accident
-	UART0_C2 |= UART_C2_RIE; // Set UART Rx interrupt
-	// Queue serial read
-	UART0_D = 'D';
-	UART0_D = '\r';
-	Main_ForceCaptureMode |= ForceCaptureMode_FreeRun_Serial;
-	*/
-
+	// Initialize rawio mode
+	Main_OutputMode = OutputMode_Free;
 
 	// Setup Modules
 	Output_setup();
+
+	// Delay a second so rawio doesn't start too quickly and corrupt USB init
+	delay( 1000 );
 
 	// Main Detection Loop
 	while ( 1 )
@@ -1240,32 +1417,22 @@ int main()
 
 		// RawIO Processing
 		rawio_process();
+
+		// Check to see if force (serial) measurement is ready to take (calibration)
+		if ( Main_TestState.running == 1 && Main_Calibration.caldist_next == 3 )
+		{
+			// Query force gauge twice for distance (just in case the reading is slow)
+			force_serial_cmd( 'D', (char*)Main_Calibration.force_serial, sizeof( Main_Calibration.force_serial ), 1000 );
+			force_serial_cmd( 'D', (char*)Main_Calibration.force_serial, sizeof( Main_Calibration.force_serial ), 1000 );
+
+			// Calibration measurements finish, prepare to send data
+			Main_Calibration.caldist_next = 4;
+		}
 	}
 }
 
 // TODO Removeme once implemented in Python
 #if 0
-void cliFunc_distRead( char* args )
-{
-	// Parse number from argument
-	//  NOTE: Only first argument is used
-	char* arg1Ptr;
-	char* arg2Ptr;
-	argumentIsolation_cli( args, &arg1Ptr, &arg2Ptr );
-
-	// Convert the argument into an int
-	int read_count = decToInt( arg1Ptr ) + 1;
-
-	// If no argument specified, default to 1 read
-	if ( *arg1Ptr == '\0' )
-	{
-		read_count = 2;
-	}
-
-	// Repeat reading as many times as specified in the argument
-	print( NL );
-	while ( --read_count > 0 )
-	{
 		// Prepare to print output
 		info_msg("Distance: ");
 
@@ -1308,14 +1475,6 @@ void cliFunc_distRead( char* args )
 		print(" um  ");
 		printInt32( distNM );
 		print(" nm  ");
-
-		print( NL );
-
-		// Only delay if still counting
-		if ( read_count > 1 )
-			delay( 50 );
-	}
-}
 #endif
 
 void cliFunc_up( char* args )
@@ -1338,6 +1497,12 @@ void cliFunc_stop( char* args )
 		info_print("Stopping test.");
 		Main_TestState.running = 0;
 	}
+
+	// Cleanup
+	Main_TestState.test_cur = 0;
+	Main_OutputMode = OutputMode_Free;
+	Main_Calibration.caldist_next = 0;
+	Main_Calibration.direction = Direction_None;
 }
 
 void cliFunc_stat( char* args )
@@ -1458,7 +1623,7 @@ void cliFunc_buzz( char* args )
 	CLI_argumentIsolation( curArgs, &arg1Ptr, &arg2Ptr );
 
 	// Get argument if set
-	uint16_t value = *arg1Ptr == '\0' ? 4095 : numToInt( arg1Ptr );
+	uint16_t value = *arg1Ptr == '\0' ? 0xFFFF : numToInt( arg1Ptr );
 
 	// Set buzzer
 	buzzer_set( value );
@@ -1466,6 +1631,48 @@ void cliFunc_buzz( char* args )
 	print( NL );
 	info_msg("Buzzer set to: ");
 	printInt16( value );
+}
+
+void cliFunc_caladc( char* args )
+{
+	char* curArgs;
+	char* arg1Ptr;
+	char* arg2Ptr = args;
+
+	// Process argument
+	curArgs = arg2Ptr;
+	CLI_argumentIsolation( curArgs, &arg1Ptr, &arg2Ptr );
+
+	// Get argument if set
+	uint16_t value = *arg1Ptr == '\0' ? ADC_FORCE_OFFSET_DEFAULT : numToInt( arg1Ptr );
+
+	// Set adc offset
+	adc_offset_set( value );
+
+	print( NL );
+	info_msg("ADC Force Offset: ");
+	printInt16( value );
+}
+
+void cliFunc_caldist( char* args )
+{
+	char* curArgs;
+	char* arg1Ptr;
+	char* arg2Ptr = args;
+
+	// Process argument
+	curArgs = arg2Ptr;
+	CLI_argumentIsolation( curArgs, &arg1Ptr, &arg2Ptr );
+
+	// Get argument if set
+	if ( *arg1Ptr != '\0' )
+	{
+		Main_Calibration.caldist = numToInt( arg1Ptr );
+	}
+
+	print( NL );
+	info_msg("Current Calibration Distance (ticks): ");
+	printInt32( Main_Calibration.caldist );
 }
 
 void cliFunc_test( char* args )
@@ -1488,7 +1695,7 @@ void cliFunc_test( char* args )
 	CLI_argumentIsolation( curArgs, &arg1Ptr, &arg2Ptr );
 
 	// Get argument if set
-	Main_TestState.test_total = *arg1Ptr == '\0' ? 1 : numToInt( arg1Ptr );
+	Main_TestState.test_total = *arg1Ptr == '\0' ? 2 : numToInt( arg1Ptr );
 
 	// Reset state
 	Main_TestState.test_cur = 1; // Starts on test 1
@@ -1502,10 +1709,17 @@ void cliFunc_test( char* args )
 	// Run tests
 	Main_TestState.running = 1;
 
+	// Set output mode to single-shot
+	Main_OutputMode = OutputMode_Single_Next;
+
+	// Set current distance
+	Main_Calibration.caldist_last = Main_FreeRunData.distance;
+
 	// Msg
 	info_msg("Starting test with '");
 	printInt16( Main_TestState.test_total );
 	print("' iterations");
+	Main_rawio_pending_status_str = "MStarting Test/Calibration";
 
 	// Start motor downwards
 	motor_down_start();
