@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-# Kiibohd Force Gauge Python Interface
-# Requires Python3 version of pyusb
+'''
+Kiibohd Force Gauge Python Interface
+Requires Python3 version of pyusb
+'''
 
 # Copyright (C) 2016 by Jacob Alexander
 #
@@ -69,6 +71,9 @@ textFormatter_lookup = {
 }
 
 def textFormatter_gettext( s ):
+	'''
+	Cleans up argparse help information
+	'''
 	return textFormatter_lookup.get( s, s )
 
 argparse._ = textFormatter_gettext

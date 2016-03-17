@@ -629,11 +629,15 @@ inline void force_setup()
 	// ADICLK:   (bus)/2 divider
 	// MODE:   16-bit
 	// ADLSMP: Long sample
-	ADC0_CFG1 = ADC_CFG1_ADIV(1) | ADC_CFG1_ADICLK(1) | ADC_CFG1_MODE(3) | ADC_CFG1_ADLSMP;
+	//ADC0_CFG1 = ADC_CFG1_ADIV(1) | ADC_CFG1_ADICLK(1) | ADC_CFG1_MODE(3) | ADC_CFG1_ADLSMP;
+	// ADIV:   (input)/8 divider
+	ADC0_CFG1 = ADC_CFG1_ADIV(3) | ADC_CFG1_ADICLK(1) | ADC_CFG1_MODE(3) | ADC_CFG1_ADLSMP;
 
 	// - CFG2 -
 	// ADLSTS: 6 extra ADCK cycles; 10 ADCK cycles total sample time
-	ADC0_CFG2 = ADC_CFG2_ADLSTS(2);
+	//ADC0_CFG2 = ADC_CFG2_ADLSTS(2);
+	// ADLSTS: 20 extra ADCK cycles; 24 ADCK cycles total sample time
+	ADC0_CFG2 = ADC_CFG2_ADLSTS(0);
 
 	// - SC2 -
 #if defined(VREF3_3)
@@ -1430,52 +1434,6 @@ int main()
 		}
 	}
 }
-
-// TODO Removeme once implemented in Python
-#if 0
-		// Prepare to print output
-		info_msg("Distance: ");
-
-		// Data
-		uint32_t distInput = readDistanceGauge() - distanceOffset;
-
-		// Output result
-		printInt32( distInput );
-
-		// Convert to mm
-		// As per http://www.shumatech.com/web/21bit_protocol?page=0,1
-		// 21 bits is 2560 CPI (counts per inch) (C/inch)
-		// 1 inch is 25.4 mm
-		// 2560 / 25.4 = 100.7874016... CPMM (C/mm)
-		// Or
-		// 1 count is 1/2560 = 0.000390625... inches
-		// 1 count is (1/2560) * 25.4 = 0.00992187500000000 mm = 9.92187500000000 um = 9921.87500000000 nm
-		// Since there are 21 bits (2 097 152 positions) converting to um is possible by multiplying by 1000
-		//    which is 2 097 152 000, and within 32 bits (4 294 967 295).
-		// However, um is still not convenient, so 64 bits (18 446 744 073 709 551 615) is a more accurate alternative.
-		// For each nm there are 2 097 152 000 000 positions.
-		// And for shits:
-		//    mm is 2 097 152                 :          0.009 921 875 000 mm : 32 bit
-		//    um is 2 097 152 000             :          9.921 875 000     um : 32 bit (ideal acc. for 32 bit)
-		//    nm is 2 097 152 000 000         :      9 921.875 000         nm : 64 bit
-		//    pm is 2 097 152 000 000 000     :  9 921 875.000             pm : 64 bit (ideal acc. for 64 bit)
-
-		// XXX Apparently shumatech was sorta wrong about the 21 bits of usage
-		// Yes there are 21 bits, but the values only go from ~338 to ~30681 which is less than 16 bits...
-		// This means that the conversion at NM can use 32 bits :D
-		// It's been noted that the multiplier should be 100.6 (and that it could vary from scale to scale)
-		uint32_t distNM = distInput * 9921;;
-		uint32_t distUM = distNM / 1000;
-		uint32_t distMM = distUM / 1000;
-
-		print("  ");
-		printInt32( distMM );
-		print(" mm  ");
-		printInt32( distUM );
-		print(" um  ");
-		printInt32( distNM );
-		print(" nm  ");
-#endif
 
 void cliFunc_up( char* args )
 {
