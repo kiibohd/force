@@ -50,6 +50,7 @@ import sys
 
 # Print Decorator Variables
 ERROR = '\033[5;1;31mERROR\033[0m:'
+WARNING = '\033[1;33mWARNING\033[0m:'
 
 
 
@@ -171,6 +172,8 @@ class ForceData:
 		self.force_adc_serial_factor = None
 		self.usable_distance_range = None
 		self.usable_force_range = None
+		self.tests = 0
+		self.extra_info = dict()
 
 	def set_test( self, num ):
 		'''
@@ -182,6 +185,10 @@ class ForceData:
 		if num not in self.test_data.keys():
 			self.test_data[ num ] = []
 			self.analysis_data[ num ] = []
+
+		# Update total number of tests
+		if num + 1 > self.tests:
+			self.tests = num + 1
 
 	def add( self, data_point ):
 		'''
@@ -216,7 +223,7 @@ class ForceData:
 
 		# Determine distance range, use raw adc values from press
 		adc_diff = list( np.diff( [ elem.force_adc for elem in self.test_data[ self.cur_test ][ :self.mid_point() ] ] ) )
-		peaks = peakdet( adc_diff, 400 )[0] # TODO configurable delta and forced range
+		peaks = peakdet( adc_diff, 200 )[0] # TODO configurable delta and forced range
 		first = adc_diff.index( peaks[0][1] )
 		last = adc_diff.index( peaks[-1][1] )
 		dist_mm = self.distance_mm()
@@ -290,19 +297,91 @@ class ForceData:
 		#return [ (data.distance - min_value) * 0.009921875 for data in self.test_data[ self.cur_test ] ]
 		# Determine 0 point and release offset (starting from the bottom out)
 		mm_conv = 0.009921875
-		zero_point = self.test_data[ self.cur_test ][ self.mid_point_peak()[0] ].distance
-		offset = (
-			self.test_data[ self.cur_test ][ self.mid_point_peak()[0] ].distance
-			- self.test_data[ self.cur_test ][ self.mid_point_peak()[1] ].distance
-		)
-		offset *= mm_conv
+		mid_point_peak = self.mid_point_peak()
+		zero_point_press = self.test_data[ self.cur_test ][ mid_point_peak[0] ].distance
+		zero_point_release = self.test_data[ self.cur_test ][ mid_point_peak[1] ].distance
+
+		print( zero_point_press, zero_point_release )
+
 		mid_point = self.mid_point()
 
 		# Compute lists with offsets
-		press = [ (data.distance - zero_point) * mm_conv - offset for data in self.test_data[ self.cur_test ][:mid_point] ]
-		release = [ (data.distance - zero_point) * mm_conv + offset for data in self.test_data[ self.cur_test ][mid_point:] ]
+		press = [ (data.distance - zero_point_press) * mm_conv for data in self.test_data[ self.cur_test ][:mid_point] ]
+		release = [ (data.distance - zero_point_release) * mm_conv for data in self.test_data[ self.cur_test ][mid_point:] ]
 
 		press.extend( release )
+
+		# Make sure distance points are sequential
+		# 3 point, 2 differences (Naive -HaaTa)
+#		for index, elem in enumerate( press ):
+#			# We need adjacent points to do check
+#			if index == 0 or index == len( press ) - 1:
+#				continue
+#
+#			# Look for non-sequential distance points
+#			# These may happen due to a firmware bug, transient reading error, or mm conversion error
+#			before = press[index - 1]
+#			after = press[index + 1]
+#			if ( before > elem and after > elem ) or ( before < elem and after < elem ):
+#				avg = ( before + after ) / 2
+#				press[index] = avg
+#				# Warn the user we are modifying data
+#				print ( "{0} Found non-sequential point {1} mm  at index '{2}' between {3} mm and {4} mm. "
+#					"Averaging to {5} mm.".format(
+#						WARNING,
+#						elem, index,
+#						before, after,
+#						avg,
+#					)
+#				)
+
+		# Make sure distance points are sequential
+		# Using 5 points to determine directional intent (curve changes direction)
+		for index, elem in enumerate( press ):
+			# We need adjacent points to do check
+			if index == 0 or index > len( press ) - 4:
+				continue
+
+			# Look for non-sequential distances points
+			# The algorithm is to look at the 3 differences between the 4 points
+			# If 3/4 differences point in one direction *and* changing the current element brings this to 4/4
+			# in a single direction, change, otherwise, do nothing
+			results = []
+			total_pos = 0
+			total_neg = 0
+			for pos in range( index - 1, index + 3 ):
+				results.append( press[pos] - press[pos + 1] )
+				if results[-1] > 0:
+					total_pos += 1
+				elif results[-1] < 0:
+					total_neg -= 1
+
+			# Adjustment condition, must have 3/4 in the same direction to make an adjustment
+			if (
+				( total_pos == 3 and ( results[0] < 0 or results[1] < 0 ) ) or
+				( total_neg == -3 and ( results[0] > 0 or results[1] > 0 ) )
+			):
+				before = press[index - 1]
+				after = press[index + 1]
+				avg = ( before + after ) / 2
+
+				# Ignore if after position is the 0 mm position
+				if after == 0.0 or elem == 0.0:
+					continue
+
+				press[index] = avg
+
+				# Warn the user we are modifying data
+				print ( "{0} Found non-sequential point {1} mm  at index '{2}' between {3} mm and {4} mm. "
+					"Averaging to {5} mm.".format(
+						WARNING,
+						elem, index,
+						before, after,
+						avg,
+					)
+				)
+
+
 
 		return press
 
@@ -337,10 +416,48 @@ class ForceData:
 		'''
 		import numpy as np
 
+		from operator import itemgetter
+
 		adc_diff = list( np.diff( [ elem.force_adc for elem in self.test_data[ self.cur_test ] ] ) )
-		return ( adc_diff.index( max( adc_diff ) ), adc_diff.index( min( adc_diff ) ) )
 
+		# XXX Naive version
+		#return ( adc_diff.index( max( adc_diff ) ), adc_diff.index( min( adc_diff ) ) )
 
+		# XXX Peak detection version (still a bit naive) -HaaTa
+		#peaks = peakdet( adc_diff, 200 )
+		#return ( int( peaks[0][0][0] ), int( peaks[1][-1][0] ) )
+
+		# Peak detection with peak analysis
+		# For the max (bottom out start), find the highest peak, then check the previous peak
+		# If it's force peak is greater than half of the current, then move the peak, and check again
+		# For the min (bottom out end), check forward instead
+		peaks = peakdet( adc_diff, 100 )
+		max_peaks = peaks[0].tolist()
+		min_peaks = peaks[1].tolist()
+		max_point = max_peaks.index( max( max_peaks, key=itemgetter( 1 ) ) )
+		min_point = min_peaks.index( min( min_peaks, key=itemgetter( 1 ) ) )
+
+		# Bottom out start approximation
+		for index in range( max_point - 1, -1, -1 ):
+			# Check if force peak is at least half as large as the previous
+			if max_peaks[index][1] < max_peaks[index - 1][1] / 2:
+				break
+
+			# Update new bottom out point
+			max_point = index
+
+		# Bottom out end approximation
+		for index in range( min_point + 1, len( min_peaks ) ):
+			# Check if force peak is at least half as large as the previous
+			if min_peaks[index][1] > min_peaks[index - 1][1] / 2:
+				break
+
+			# Update new bottom out point
+			min_point = index
+
+		peaks = ( int( max_peaks[max_point][0] ), int( min_peaks[min_point][0] ) )
+
+		return peaks
 
 	def actuation( self ):
 		'''
@@ -386,6 +503,10 @@ class GenericForceData:
 		self.cur_test = None
 		self.calibration = False
 
+		# Check if a valid input file
+		if input_file is not None and not self.valid_input_file():
+			self.valid_input_file()
+
 	def process_input( self ):
 		'''
 		Import force data from file into force_data structure
@@ -398,6 +519,12 @@ class GenericForceData:
 		'''
 		raise NotImplementedError("Invalid/Not implemented yet")
 
+	def valid_input_file( self ):
+		'''
+		Checks if the input file is valid.
+		'''
+		raise NotImplementedError("Invalid/Not implemented yet")
+
 
 
 class RawForceData( GenericForceData ):
@@ -405,7 +532,25 @@ class RawForceData( GenericForceData ):
 	Class used to import and prepare force gauge data
 	'''
 	def __init__( self, force_data, input_file ):
+		# Store extension (used to determine if compressed)
+		split = os.path.splitext( input_file )
+		self.extension = split[1]
+
 		super( RawForceData, self ).__init__( force_data, input_file, None )
+
+		in_file = input_file
+		if self.extension == '.gz':
+			in_file = split[0]
+
+		# Read in companion json file if it exists
+		json_info = "{0}.json".format( os.path.splitext( in_file )[0] )
+		if not os.path.exists( json_info ):
+			print ( "{0} JSON info not available '{1}', conversion may not be complete".format( WARNING, json_info ) )
+			return
+
+		with open( json_info ) as fp:
+			import json
+			self.force_data.extra_info = json.load( fp )
 
 	def start( self ):
 		'''
@@ -433,6 +578,26 @@ class RawForceData( GenericForceData ):
 		Test complete handler
 		'''
 		self.calibration = False
+
+	def valid_input_file( self ):
+		'''
+		Checks if the raw file is valid in the last 5 lines
+		Just need to make sure there is a 'Test Complete' at the end of the file
+		No need to process corrupted files (takes a long time to figure this out otherwise...)
+		'''
+		import subprocess
+
+		# Compressed, yes due to gzip, we have to decompress the whole thing first...
+		if self.extension == '.gz':
+			ps = subprocess.Popen( [ 'gunzip', '-c', self.input_file ], stdout=subprocess.PIPE )
+			lines = subprocess.check_output( [ 'tail', '-5' ], stdin=ps.stdout ).decode('utf-8')
+		# Using subprocess, because simple and fast
+		else:
+			lines = subprocess.check_output( [ 'tail', '-5', self.input_file ] ).decode('utf-8')
+
+		# Check for proper finish of the file
+		if 'Test Complete' not in lines:
+			raise RuntimeError("Corrupted .raw file, missing 'Test Complete'")
 
 	def calibration_point( self, line ):
 		'''
@@ -532,6 +697,14 @@ class RawForceData( GenericForceData ):
 		'''
 		Import force data from file into force_data structure
 		'''
+		# Check to see if this file was compressed
+		rawfile = None
+		if self.extension == '.gz':
+			import gzip
+			rawfile = gzip.open( self.input_file, 'rt' )
+		else:
+			rawfile = open( self.input_file, 'r' )
+
 		# Event tags
 		events = {
 			"Starting Test/Calibration" : "start",
@@ -546,7 +719,7 @@ class RawForceData( GenericForceData ):
 		}
 
 		# Read file line-by-line
-		for line in open( self.input_file, 'r' ):
+		for line in rawfile:
 			if line is None:
 				continue
 
@@ -563,6 +736,8 @@ class RawForceData( GenericForceData ):
 				method = getattr( self, data_points[ point[0] ] )
 				method( line )
 				continue
+
+		rawfile.close()
 
 
 class CSVForceData( GenericForceData ):
@@ -638,21 +813,21 @@ class PlotlyForceData( GenericForceData ):
 		import plotly.offline as py
 		from plotly.graph_objs import Layout, Scatter, Scattergl
 
-		# TODO Get info from file/command line args
-		plot_data = {
-			'test_name'  : 'Cherry 01APBSW Switch',
-			'file_name'  : 'Cherry_01APBSW.html',
-			'info_box'   :
-				'Cherry 01APBSW</br>'
-				'(NOS) Loose Switch</br>'
-				'<a href="http://kiibohd.com">HaaTa</a></br>'
-				'2016-03-13',
-			'line_width' : 3,
-		}
+		# Retrieve misc info about force curve(s)
+		plot_data = self.force_data.extra_info
 
 		# Graph infobox
 		info_box = {
-			'text' : plot_data['info_box'],
+			'text' :
+				'{0}</br>'
+				'{1}</br>'
+				'<a href="{2}">{3}</a></br>'
+				'{4}'.format(
+					plot_data['test_name'],
+					plot_data['info_box_desc'],
+					plot_data['url'], plot_data['nick'],
+					plot_data['updated']
+				),
 			'bgcolor': 'rgb(255, 255, 255)',
 			'bordercolor': 'rgb(232, 174, 90)',
 			'borderwidth': 4,
@@ -682,6 +857,11 @@ class PlotlyForceData( GenericForceData ):
 		distance = self.force_data.distance_mm()
 		mid_point = self.force_data.mid_point()
 
+		# Only hide calibration if there is actual test data
+		visible = 'legendonly'
+		if self.force_data.tests == 1:
+			visible = 'true'
+
 		# Setup calibration graphs
 		# TODO convert to Scattergl when less buggy -HaaTa
 		graphs = [
@@ -693,7 +873,7 @@ class PlotlyForceData( GenericForceData ):
 				line={
 					'width' : plot_data['line_width'],
 				},
-				visible='legendonly',
+				visible=visible,
 			),
 			Scatter(
 				x=distance[mid_point:],
@@ -703,7 +883,7 @@ class PlotlyForceData( GenericForceData ):
 				line={
 					'width' : plot_data['line_width'],
 				},
-				visible='legendonly',
+				visible=visible,
 			),
 			Scatter(
 				x=distance[:mid_point],
@@ -713,7 +893,7 @@ class PlotlyForceData( GenericForceData ):
 				line={
 					'width' : plot_data['line_width'],
 				},
-				visible='legendonly',
+				visible=visible,
 			),
 			Scatter(
 				x=distance[mid_point:],
@@ -723,82 +903,82 @@ class PlotlyForceData( GenericForceData ):
 				line={
 					'width' : plot_data['line_width'],
 				},
-				visible='legendonly',
+				visible=visible,
 			),
 		]
 
 		# Setup normal test graphs
-		# TODO handle more than one graph
-		self.force_data.set_test( 1 )
-		mid_point = self.force_data.mid_point_dir()
-		force_adc = self.force_data.force_adc_converted()
-		distance = self.force_data.distance_mm()
-		actuation = self.force_data.actuation()
+		for index in range( 1, self.force_data.tests ):
+			self.force_data.set_test( index )
+			mid_point = self.force_data.mid_point_dir()
+			force_adc = self.force_data.force_adc_converted()
+			distance = self.force_data.distance_mm()
+			actuation = self.force_data.actuation()
 
-		# TODO Is this the best way to average points?
-		# For distance positions with multiple readings, do an average for each reading
-		# TODO
+			# Only show the number on the legend if necessary
+			number = " {0}".format( index )
+			if self.force_data.tests == 2:
+				number = ""
+			graphs.extend([
+				Scatter(
+					x=distance[:mid_point],
+					y=force_adc[:mid_point],
+					name="Press{0}".format( number ),
+					legendgroup='test{0}'.format( index ),
+					line={
+						'width' : plot_data['line_width'],
+					},
+				),
+				Scatter(
+					x=distance[mid_point:],
+					y=force_adc[mid_point:],
+					name="Release{0}".format( number ),
+					legendgroup='test{0}'.format( index ),
+					line={
+						'width' : plot_data['line_width'],
+					},
+				),
+			])
 
-		graphs.extend([
-			Scatter(
-				x=distance[:mid_point],
-				y=force_adc[:mid_point],
-				name="Press",
-				legendgroup='test1',
-				line={
-					'width' : plot_data['line_width'],
-				},
-			),
-			Scatter(
-				x=distance[mid_point:],
-				y=force_adc[mid_point:],
-				name="Release",
-				legendgroup='test1',
-				line={
-					'width' : plot_data['line_width'],
-				},
-			),
-		])
+			# Press
+			if len( actuation ) > 0:
+				annotations.extend([{
+					'text' : 'Press',
+					'font': {
+						'color': 'rgb(37, 37, 37)',
+						'family': 'Open Sans, sans-serif',
+						'size': 24,
+					},
+					'x': distance[ actuation[0] ],
+					'y': force_adc[ actuation[0] ],
+					'xref' : 'x',
+					'yref' : 'y',
+					'showarrow' : True,
+					'arrowhead' : 7,
+					'arrowcolor' : 'rgb(88, 156, 189)',
+					'ax' : 0,
+					'ay' : -70,
+				}])
 
-		# Press
-		if len( actuation ) > 0:
-			annotations.extend([{
-				'text' : 'Press',
-				'font': {
-					'color': 'rgb(37, 37, 37)',
-					'family': 'Open Sans, sans-serif',
-					'size': 24,
-				},
-				'x': distance[ actuation[0] ],
-				'y': force_adc[ actuation[0] ],
-				'xref' : 'x',
-				'yref' : 'y',
-				'showarrow' : True,
-				'arrowhead' : 7,
-				'arrowcolor' : 'rgb(88, 156, 189)',
-				'ax' : 0,
-				'ay' : -70,
-			}])
-
-		# Release
-		if len( actuation ) > 1:
-			annotations.extend([{
-				'text' : 'Release',
-				'font': {
-					'color': 'rgb(37, 37, 37)',
-					'family': 'Open Sans, sans-serif',
-					'size': 24,
-				},
-				'x': distance[ actuation[1] ],
-				'y': force_adc[ actuation[1] ],
-				'xref' : 'x',
-				'yref' : 'y',
-				'showarrow' : True,
-				'arrowhead' : 7,
-				'arrowcolor' : 'rgb(232, 174, 90)',
-				'ax' : 0,
-				'ay' : 70,
-			}])
+			# Release
+			if len( actuation ) > 1:
+				annotations.extend([{
+					'text' : 'Release',
+					'font': {
+						'color': 'rgb(37, 37, 37)',
+						'family': 'Open Sans, sans-serif',
+						'size': 24,
+					},
+					'x': distance[ actuation[1] ],
+					'y': force_adc[ actuation[1] ],
+					'xref' : 'x',
+					'yref' : 'y',
+					'showarrow' : True,
+					'arrowhead' : 7,
+					'arrowcolor' : 'rgb(232, 174, 90)',
+					'ax' : 0,
+					'ay' : 70,
+				}])
 
 		# Layout/Theme Settings
 		layout_settings = {
@@ -833,7 +1013,7 @@ class PlotlyForceData( GenericForceData ):
 			'plot_bgcolor': '#fff',
 			'separators': '.,',
 			'showlegend': True,
-			'title': plot_data['test_name'],
+			'title': "{0} Switch".format( plot_data['test_name'] ),
 			'titlefont': {
 				'color': 'rgb(255, 255, 255)',
 				'family': 'Open Sans, sans-serif',
@@ -925,7 +1105,7 @@ class PlotlyForceData( GenericForceData ):
 			'layout'      : layout_settings,
 		}
 
-		py.plot( force_curve, filename=plot_data['file_name'], )
+		py.plot( force_curve, filename="{0}.html".format( plot_data['base_filename'] ), )
 
 
 
@@ -942,7 +1122,8 @@ def processCommandLineArgs( force_data ):
 	pArgs = argparse.ArgumentParser(
 		usage="%(prog)s [options] <input file> <output file1> [<output file2>..]",
 		description="This script takes a given input file, imports it, then converts to the format\n"
-		"specified by the output file(s). If not extension is given, .raw is assumed.\n"
+		"specified by the output file(s). If no extension is given, .raw is assumed.\n"
+		".gz extension is recognized, and files will be unzip while reading.\n"
 		"\n"
 		"Supported Input Formats:\n"
 		" - .raw\n"
@@ -992,7 +1173,12 @@ def processCommandLineArgs( force_data ):
 		'.svg'  : 'SVGForceData',
 	}
 	input_filename = args.input_file
-	ext = os.path.splitext( input_filename )[1]
+	split = os.path.splitext( input_filename )
+	ext = split[1]
+
+	# Check if .gz file
+	if split[1] == '.gz':
+		ext = os.path.splitext( split[0] )[1]
 
 	# Raw is handled differently as it's only an input
 	inputs = []

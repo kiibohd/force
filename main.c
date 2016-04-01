@@ -365,8 +365,8 @@ inline void distance_setup()
 	NVIC_SET_PRIORITY( IRQ_PORTD, 2 );
 #endif
 
-	// Set default calibration distance of ~0.4 mm
-	Main_Calibration.caldist = 40;
+	// Set default calibration distance of ~0.05 mm
+	Main_Calibration.caldist = 5;
 	Main_Calibration.caldist_next = 0;
 	Main_Calibration.marker = 'C';
 	Main_FreeRunData.marker = 'D';
@@ -1008,7 +1008,7 @@ void portd_isr()
 					else if ( (
 						// Up
 						Main_FreeRunData.distance > Main_Calibration.caldist_last &&
-						Main_Calibration.caldist + Main_Calibration.caldist_last > Main_FreeRunData.distance
+						Main_Calibration.caldist + Main_Calibration.caldist_last < Main_FreeRunData.distance
 					) || (
 						// Down
 						Main_FreeRunData.distance < Main_Calibration.caldist_last &&
@@ -1018,6 +1018,7 @@ void portd_isr()
 						// Record current movement state
 						Main_Calibration.direction = Main_FreeRunData.direction;
 						Main_Calibration.caldist_next = 1;
+						Main_Calibration.caldist_last = Main_FreeRunData.distance;
 
 						// Stop motor
 						motor_stop();
@@ -1425,6 +1426,9 @@ int main()
 		// Check to see if force (serial) measurement is ready to take (calibration)
 		if ( Main_TestState.running == 1 && Main_Calibration.caldist_next == 3 )
 		{
+			// Delay one second to steady the reading
+			delay( 50 );
+
 			// Query force gauge twice for distance (just in case the reading is slow)
 			force_serial_cmd( 'D', (char*)Main_Calibration.force_serial, sizeof( Main_Calibration.force_serial ), 1000 );
 			force_serial_cmd( 'D', (char*)Main_Calibration.force_serial, sizeof( Main_Calibration.force_serial ), 1000 );

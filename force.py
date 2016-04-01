@@ -46,9 +46,12 @@ Requires Python3 version of pyusb
 
 from array       import array
 from collections import namedtuple
+from datetime    import date
 from struct      import unpack
 
 import argparse
+import gzip
+import json
 import os
 import sys
 import time
@@ -245,8 +248,12 @@ ForceCurveCalibrationPoint = namedtuple(
 )
 
 forcecurve_filename = "unk.raw"
+forcecurve_base_filename = "unk"
 
 def decode_data( data ):
+	'''
+	Decodes incoming struct data based upon the type (first 8bit character)
+	'''
 	# Determine type of data
 	if data[0] == ord('D'):
 		data_unp = unpack( '<LLLHHHBB10s', data[1:31] )
@@ -259,9 +266,19 @@ def decode_data( data ):
 		return bytearray( data[1:] ).split( b'\x00' )[0].decode("utf-8")
 
 def reinit_read():
+	'''
+	Reads data from force gauge microcontroller
+	Retries automatically if contact is broken/lost
+
+	Check for specific tags to determine state of data recording
+
+	NOTE
+	It is important that USB and the files are cleaned up properly before retrying
+	There are still some residual USB resource locking issues that may cause the terminal to hang
+	'''
 	try:
 		rawhid = KiibohdRawIO( debug_mode=False, timeout=1000 )
-		#rawhid = KiibohdRawIO( debug_mode=True, timeout=1000 )
+
 	except ( usb.core.USBError, ValueError ):
 		# Just sleep, then we'll try again in a bit
 		time.sleep(1)
@@ -279,7 +296,9 @@ def reinit_read():
 			# Check if useful
 			if data_unp_map == "Starting Test/Calibration":
 				# Write file to disk
-				outfile = open( forcecurve_filename, 'w' )
+				# TODO Add option to enable/disable compression
+				#outfile = open( forcecurve_filename, 'w' )
+				outfile = gzip.open( "{0}.gz".format( forcecurve_filename ), 'wt' )
 				write_file = True
 
 			# Write to file if allowed
@@ -288,9 +307,31 @@ def reinit_read():
 			print( data_unp_map )
 
 			# Check if this was the last line
-			if data_unp_map == "Test Complete":
+			if data_unp_map == "Test Complete" and write_file:
 				outfile.close()
 				write_file = False
+
+				# Generate skeleton json file
+				# TODO parameterize more
+				info = {
+					"test_name" : forcecurve_base_filename.replace('_', ' '),
+					"base_filename" : forcecurve_base_filename,
+					"info_box_desc"  : "",
+					"line_width" : 3,
+					"description" : [
+						"",
+					],
+					"created" : date.today().isoformat(),
+					"updated" : date.today().isoformat(),
+					"author" : "Jacob Alexander",
+					"nick" : "HaaTa",
+					"url" : "http://kiibohd.com",
+
+				}
+				outfile = open( "{0}.json".format( forcecurve_base_filename ), 'w' )
+				json.dump( info, outfile, indent='\t', separators=( ',', ' : ' ) )
+				outfile.close()
+
 				break
 
 	except usb.core.USBError:
@@ -312,6 +353,10 @@ def reinit_read():
 ### Argument Processing ###
 
 def processCommandLineArgs():
+	'''
+	Process the command line arguments
+	'''
+
 	# Setup argument processor
 	pArgs = argparse.ArgumentParser(
 		usage="%(prog)s [options] <test name>",
@@ -335,16 +380,20 @@ def processCommandLineArgs():
 	args = pArgs.parse_args()
 
 	# Parameters
-	test_filename = "{0}.raw".format( args.test_name )
+	base_filename = "{0}".format( args.test_name )
+	test_filename = "{0}.raw".format( base_filename )
 
 	# Check file existance, and rename if necessary
 	counter = 1
 	while os.path.isfile( test_filename ):
-		test_filename = "{0}-{1}.raw".format( args.test_name, counter )
+		base_filename = "{0}-{1}".format( args.test_name, counter )
+		test_filename = "{0}.raw".format( base_filename )
 		counter += 1
 
 	global forcecurve_filename
 	forcecurve_filename = test_filename
+	global forcecurve_base_filename
+	forcecurve_base_filename = base_filename
 
 
 
