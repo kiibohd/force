@@ -167,13 +167,65 @@ class ForceData:
 	'''
 	def __init__( self ):
 		self.cur_test = 0
-		self.test_data = dict()
-		self.analysis_data = dict()
-		self.force_adc_serial_factor = None
-		self.usable_distance_range = None
-		self.usable_force_range = None
+		self.cur_switch = 0
 		self.tests = 0
-		self.extra_info = dict()
+		self.switches = 0
+
+		# Initialize datastructure
+		self.data = []
+
+	def get( self, name ):
+		'''
+		Convenience get access to data
+		'''
+		return self.data[ self.cur_switch ][ name ][ self.cur_test ]
+
+	def set( self, name, value ):
+		'''
+		Convenience set access to data
+		'''
+		self.data[ self.cur_switch ][ name ][ self.cur_test ] = value
+
+	def get_var( self, name ):
+		'''
+		Convenience get access to data, single variable
+		'''
+		return self.data[ self.cur_switch ][ name ]
+
+	def set_var( self, name, value ):
+		'''
+		Convenience set access to data, single variable
+		'''
+		self.data[ self.cur_switch ][ name ] = value
+
+	def set_options( self, curves, press_disable, release_disable ):
+		'''
+		Various options set by the command line
+		'''
+		self.curves = curves
+		self.press_disable = press_disable
+		self.release_disable = release_disable
+
+	def set_switch( self, num ):
+		'''
+		Sets the switch datastructure to perform operations on
+		'''
+		# Add switch storage element if needed
+		while len( self.data ) < num + 1:
+			self.data.append( {
+					'test' : { 0 : [] },
+					'analysis' : { 0 : [] },
+					'force_adc_serial_factor' : None,
+					'usable_distance_range' : None,
+					'usable_force_range' : None,
+					'extra_info' : dict(),
+				} )
+
+		self.cur_switch = num
+
+		# Update total number of switches
+		if num + 1 > self.switches:
+			self.switches = num + 1
 
 	def set_test( self, num ):
 		'''
@@ -182,9 +234,9 @@ class ForceData:
 		self.cur_test = num
 
 		# Prepare list
-		if num not in self.test_data.keys():
-			self.test_data[ num ] = []
-			self.analysis_data[ num ] = []
+		if num not in self.data[ self.cur_switch ]['test'].keys():
+			self.data[ self.cur_switch ]['test'][ num ] = []
+			self.data[ self.cur_switch ]['analysis'][ num ] = []
 
 		# Update total number of tests
 		if num + 1 > self.tests:
@@ -194,7 +246,7 @@ class ForceData:
 		'''
 		Adds a ForceDataPoint to the list
 		'''
-		self.test_data[ self.cur_test ].append( data_point )
+		self.get('test').append( data_point )
 
 
 	def calibration_analysis( self ):
@@ -205,7 +257,102 @@ class ForceData:
 		import numpy as np
 		import statistics
 
-		for index, datapoint in enumerate( self.test_data[ self.cur_test ] ):
+		midpoint = self.mid_point()
+
+		# Calibration Alignment
+		# Unfortunately, press/release aren't entirely distance aligned
+		# This algorithm finds the 0 pivot point and the release curve offset
+		#
+		# And for double annoyance, the ADC force data is different as well
+		# So it has to be aligned separately :/
+		# Then the serial and adc curves need to be aligned
+
+		# Align Calibration Serial Force Data
+		serial_press = self.force_serial()[ :midpoint ]
+		serial_release = self.force_serial()[ midpoint: ]
+
+		serial_alignment = min( max( serial_press ), max( serial_release ) )
+
+		serial_press_point = [ index for index, elem in enumerate( serial_press ) if elem >= serial_alignment ]
+		serial_release_point = [ index for index, elem in enumerate( serial_release ) if elem >= serial_alignment ]
+
+		self.cal_serial_press_center = self.distance_raw()[ :midpoint ][ serial_press_point[-1] ]
+		self.cal_serial_release_center = self.distance_raw()[ midpoint: ][ serial_release_point[-1] ]
+
+		# Align Calibration ADC Force Data
+		adc_press = self.force_adc()[ :midpoint ]
+		adc_release = self.force_adc()[ midpoint: ]
+
+		adc_alignment = min( max( adc_press ), max( adc_release ) )
+
+		adc_press_point = [ index for index, elem in enumerate( adc_press ) if elem >= adc_alignment ]
+		adc_release_point = [ index for index, elem in enumerate( adc_release ) if elem >= adc_alignment ]
+
+		self.cal_adc_press_center = self.distance_raw()[ :midpoint ][ adc_press_point[-1] ]
+		self.cal_adc_release_center = self.distance_raw()[ midpoint: ][ adc_release_point[-1] ]
+
+
+		# Basic force adc/serial factor calculation
+		# Calculate press/release separately
+		# Only use up until synchronization point
+
+		# Press calibration
+		press_difference = self.cal_adc_press_center - self.cal_serial_press_center
+		press_analysis = []
+		for index in range( abs( press_difference ), midpoint - abs( press_difference ) ):
+			data_adc = self.get('test')[ index ]
+			data_serial = self.get('test')[ index + press_difference ]
+
+			# Compute factor
+			try:
+				force_factor = data_adc.force_adc / data_serial.force_serial
+			# Just ignore zero values, they skew results of the average anyways
+			except ZeroDivisionError:
+				continue
+
+			point = AnalysisDataPoint(
+				force_factor
+			)
+
+			press_analysis.append( point )
+
+		press_force_adc_serial_factor = statistics.median_grouped(
+				[ elem.force_adc_serial_factor for elem in press_analysis ]
+		)
+
+		# Release calibration
+		release_difference = self.cal_adc_release_center - self.cal_serial_release_center
+		release_analysis = []
+		#for index in range( 
+		for index in range( midpoint - abs( release_difference ), len( self.get('test') ) - abs( release_difference ) ):
+			data_adc = self.get('test')[ index ]
+			data_serial = self.get('test')[ index + release_difference ]
+
+			# Compute factor
+			try:
+				force_factor = data_adc.force_adc / data_serial.force_serial
+			# Just ignore zero values, they skew results of the average anyways
+			except ZeroDivisionError:
+				continue
+
+			point = AnalysisDataPoint(
+				force_factor
+			)
+
+			release_analysis.append( point )
+
+		release_force_adc_serial_factor = statistics.median_grouped(
+				[ elem.force_adc_serial_factor for elem in release_analysis ]
+		)
+
+		print( press_force_adc_serial_factor, release_force_adc_serial_factor )
+
+
+
+
+
+
+		for index, datapoint in enumerate( self.get('test') ):
 			try:
 				force_factor = datapoint.force_adc / datapoint.force_serial
 			except ZeroDivisionError:
@@ -214,47 +361,105 @@ class ForceData:
 			point = AnalysisDataPoint(
 				force_factor
 			)
-			self.analysis_data[ self.cur_test ].append( point )
+			self.get('analysis').append( point )
 
 		# Use the grouped median as the conversion factor
-		self.force_adc_serial_factor = statistics.median_grouped(
-			[ elem.force_adc_serial_factor for elem in self.analysis_data[ self.cur_test ] ]
+		self.set_var('force_adc_serial_factor',
+			statistics.median_grouped(
+				[ elem.force_adc_serial_factor for elem in self.get('analysis') ]
+			)
 		)
 
+		# XXX
+		# TODO
+		# Remove hard-coding of factor
+		print( self.get_var('force_adc_serial_factor') )
+		self.set_var('force_adc_serial_factor', ( press_force_adc_serial_factor, release_force_adc_serial_factor ) )
+		press_force_adc_serial_factor = 37.98400556328233
+		self.set_var('force_adc_serial_factor', ( press_force_adc_serial_factor, press_force_adc_serial_factor - 1.35 ) )
+
 		# Determine distance range, use raw adc values from press
-		adc_diff = list( np.diff( [ elem.force_adc for elem in self.test_data[ self.cur_test ][ :self.mid_point() ] ] ) )
+		adc_diff = list( np.diff( [ elem.force_adc for elem in self.get('test')[ :self.mid_point() ] ] ) )
 		peaks = peakdet( adc_diff, 200 )[0] # TODO configurable delta and forced range
 		first = adc_diff.index( peaks[0][1] )
 		last = adc_diff.index( peaks[-1][1] )
-		dist_mm = self.distance_mm()
-		# Round up/down to the nearst int
-		#self.usable_distance_range = ( math.ceil( dist_mm[ first ] ), math.floor( dist_mm[ last ] ) ) # XXX Technically better, but doesn't look as good -HaaTa
-		self.usable_distance_range = ( math.ceil( dist_mm[ first ] ), 0 )
 
 		# Use the max force as 2x the median grouped force over the newly calculated distance range (press)
 		# TODO configurable
 		force_data = self.force_adc_converted()[ first:last ]
-		self.usable_force_range = ( 0, statistics.median_grouped( force_data ) * 2 )
+		self.set_var('usable_force_range', ( ( 0, statistics.median_grouped( force_data ) * 2 ) ) )
+
+		# Round up/down to the nearst int
+		dist_mm = self.distance_mm()
+		#self.usable_distance_range = ( math.ceil( dist_mm[ first ] ), math.floor( dist_mm[ last ] ) ) # XXX Technically better, but doesn't look as good -HaaTa
+		self.set_var('usable_distance_range', ( math.ceil( dist_mm[ first ] ), 0 ) )
+
+
+	def max_force_points_converted( self ):
+		'''
+		Returns a tuple of the distance ticks for the max force points
+		These values are interpolated, so don't bother tryign to look them up in the dataset
+
+		Ideally, this calculation only needs to be done on the calibration data.
+		Unfortunately, some datasets...are less clean, so it's recommended to run on each press/release pair
+		'''
+		# Determine the start and max distance points (using data indices)
+		# These points will be the same for all the curves in the dataset
+		# This is used in the conversion to mm needed for the usable_distance_range
+		# Using the approximate points, interpolate to find the point we want
+		# dist = dist_1 + (dist_2 - dist_1)( (force - force_1) / (force_2 - force_1) )
+
+		# Press "wave"
+		conv_factor = self.get_var('force_adc_serial_factor')[0]
+		press_max_force_index = [
+			index
+			for index, value in enumerate( self.get('test') )
+			if value.force_adc / conv_factor > self.get_var('usable_force_range')[1]
+		][0]
+		point1 = self.get('test')[ press_max_force_index - 1 ]
+		point2 = self.get('test')[ press_max_force_index ]
+		press_max = point1.distance + ( point2.distance - point1.distance ) * (
+			(self.get_var('usable_force_range')[1] - point1.force_adc / conv_factor) /
+			(point2.force_adc / conv_factor - point1.force_adc / conv_factor)
+		)
+
+		# Release "wave"
+		conv_factor = self.get_var('force_adc_serial_factor')[1]
+		release_max_force_index = [
+			index
+			for index, value in reversed( list( enumerate( self.get('test') ) ) )
+			if value.force_adc / conv_factor > self.get_var('usable_force_range')[1]
+		][0]
+		point1 = self.get('test')[ release_max_force_index - 1 ]
+		point2 = self.get('test')[ release_max_force_index ]
+		release_max = point1.distance + ( point2.distance - point1.distance ) * (
+			(self.get_var('usable_force_range')[1] - point1.force_adc / conv_factor) /
+			(point2.force_adc / conv_factor - point1.force_adc / conv_factor)
+		)
+
+		return (press_max, release_max)
 
 
 	def force_adc( self ):
 		'''
 		Returns a list of force adc values for the current test
 		'''
-		return [ data.force_adc for data in self.test_data[ self.cur_test ] ]
+		return [ data.force_adc for data in self.get('test') ]
 
 	def force_serial( self ):
 		'''
 		Returns a list of force serial values for the current test
 		'''
-		data = [ data.force_serial for data in self.test_data[ self.cur_test ] ]
+		data = [ data.force_serial for data in self.get('test') ]
 		return data
 
 	def force_adc_converted( self ):
 		'''
 		Returns a list of force serial values for the current test
 		'''
-		data = [ data.force_adc / self.force_adc_serial_factor for data in self.test_data[ self.cur_test ] ]
+		midpoint = self.mid_point()
+		data = [ data.force_adc / self.get_var('force_adc_serial_factor')[0] for data in self.get('test')[ :midpoint ] ]
+		data.extend( [ data.force_adc / self.get_var('force_adc_serial_factor')[1] for data in self.get('test')[ midpoint: ] ] )
 		return data
 
 
@@ -262,7 +467,7 @@ class ForceData:
 		'''
 		Returns a list of distance values for the current test
 		'''
-		data = [ data.distance for data in self.test_data[ self.cur_test ] ]
+		data = [ data.distance for data in self.get('test') ]
 		return data
 
 	def distance_mm( self ):
@@ -283,31 +488,28 @@ class ForceData:
 		However, um is still not convenient, so 64 bits (18 446 744 073 709 551 615) is a more accurate alternative.
 		For each nm there are 2 097 152 000 000 positions.
 		And for shits:
-		   mm is 2 097 152                 :          0.009 921 875 000 mm : 32 bit
-		   um is 2 097 152 000             :          9.921 875 000     um : 32 bit (ideal acc. for 32 bit)
-		   nm is 2 097 152 000 000         :      9 921.875 000         nm : 64 bit
-		   pm is 2 097 152 000 000 000     :  9 921 875.000             pm : 64 bit (ideal acc. for 64 bit)
+
+		mm is 2 097 152                 :          0.009 921 875 000 mm : 32 bit
+		um is 2 097 152 000             :          9.921 875 000     um : 32 bit (ideal acc. for 32 bit)
+		nm is 2 097 152 000 000         :      9 921.875 000         nm : 64 bit
+		pm is 2 097 152 000 000 000     :  9 921 875.000             pm : 64 bit (ideal acc. for 64 bit)
 
 		XXX Apparently shumatech was sorta wrong about the 21 bits of usage
 		Yes there are 21 bits, but the values only go from ~338 to ~30681 which is less than 16 bits...
 		This means that the conversion at NM can use 32 bits :D
 		It's been noted that the multiplier should be 100.6 (and that it could vary from scale to scale)
 		'''
-		#min_value = min( self.test_data[ self.cur_test ], key = lambda t: t.distance ).distance
-		#return [ (data.distance - min_value) * 0.009921875 for data in self.test_data[ self.cur_test ] ]
-		# Determine 0 point and release offset (starting from the bottom out)
 		mm_conv = 0.009921875
-		mid_point_peak = self.mid_point_peak()
-		zero_point_press = self.test_data[ self.cur_test ][ mid_point_peak[0] ].distance
-		zero_point_release = self.test_data[ self.cur_test ][ mid_point_peak[1] ].distance
 
-		print( zero_point_press, zero_point_release )
-
-		mid_point = self.mid_point()
+		# Determine the start and max distance points (using data indices)
+		max_force_points = self.max_force_points_converted()
+		zero_point_press = max_force_points[0]
+		zero_point_release = max_force_points[1]
 
 		# Compute lists with offsets
-		press = [ (data.distance - zero_point_press) * mm_conv for data in self.test_data[ self.cur_test ][:mid_point] ]
-		release = [ (data.distance - zero_point_release) * mm_conv for data in self.test_data[ self.cur_test ][mid_point:] ]
+		mid_point = self.mid_point()
+		press = [ (data.distance - zero_point_press) * mm_conv for data in self.get('test')[:mid_point] ]
+		release = [ (data.distance - zero_point_release) * mm_conv for data in self.get('test')[mid_point:] ]
 
 		press.extend( release )
 
@@ -389,7 +591,7 @@ class ForceData:
 		'''
 		Determines the direction change point of a test sequence
 		'''
-		return self.test_data[ self.cur_test ].index( min( self.test_data[ self.cur_test ], key = lambda t: t.distance ) )
+		return self.get('test').index( min( self.get('test'), key = lambda t: t.distance ) )
 
 	def mid_point_dir( self ):
 		'''
@@ -400,7 +602,7 @@ class ForceData:
 		'''
 		prev = ForceDataPoint( None, None, None, None, None, None )
 		position = None
-		for index, elem in enumerate( self.test_data[ self.cur_test ] ):
+		for index, elem in enumerate( self.get('test') ):
 			if prev.direction == 2 and elem.direction == 1:
 				position = index
 				break
@@ -418,7 +620,7 @@ class ForceData:
 
 		from operator import itemgetter
 
-		adc_diff = list( np.diff( [ elem.force_adc for elem in self.test_data[ self.cur_test ] ] ) )
+		adc_diff = list( np.diff( [ elem.force_adc for elem in self.get('test') ] ) )
 
 		# XXX Naive version
 		#return ( adc_diff.index( max( adc_diff ) ), adc_diff.index( min( adc_diff ) ) )
@@ -471,7 +673,7 @@ class ForceData:
 		prev = ForceDataPoint( None, None, None, None, None, None )
 		state = None
 		actuation = []
-		for index, elem in enumerate( self.test_data[ self.cur_test ] ):
+		for index, elem in enumerate( self.get('test') ):
 			# Determine initial state
 			if state is None:
 				state = elem.continuity
@@ -550,7 +752,7 @@ class RawForceData( GenericForceData ):
 
 		with open( json_info ) as fp:
 			import json
-			self.force_data.extra_info = json.load( fp )
+			self.force_data.set_var( 'extra_info', json.load( fp ) )
 
 	def start( self ):
 		'''
@@ -562,22 +764,31 @@ class RawForceData( GenericForceData ):
 		self.data_point_cache = [ None ]
 
 		print ( "Processing Test #{0}".format( self.cur_test ) )
+		return True
 
 	def next_test( self ):
 		'''
 		Next test handler
 		'''
 		self.cur_test += 1
+
+		# Check if we can stop processing
+		if self.cur_test > max( self.force_data.curves ):
+			print ( "Skipping Test #{0}".format( self.cur_test ) )
+			return False
+
 		self.calibration = False
 		self.force_data.set_test( self.cur_test )
 
 		print ( "Processing Test #{0}".format( self.cur_test ) )
+		return True
 
 	def finish( self ):
 		'''
 		Test complete handler
 		'''
 		self.calibration = False
+		return True
 
 	def valid_input_file( self ):
 		'''
@@ -727,7 +938,11 @@ class RawForceData( GenericForceData ):
 			event = [ event for event in events.keys() if event in line ]
 			if any( event ):
 				method = getattr( self, events[ event[0] ] )
-				method()
+
+				# Check whether we are finishing early
+				if method() is False:
+					break
+
 				continue
 
 			# Check for data point, call the associated function
@@ -806,15 +1021,194 @@ class PlotlyForceData( GenericForceData ):
 	def __init__( self, force_data, output_file ):
 		super( PlotlyForceData, self ).__init__( force_data, None, output_file )
 
+	def process_calibration( self, graphs ):
+		'''
+		Generates the calibration graphs
+		'''
+		from plotly.graph_objs import Layout, Scatter, Scattergl
+		import numpy as np
+
+		# Retrieve misc info about force curve(s)
+		plot_data = self.force_data.get_var('extra_info')
+
+		# Acquire calibration data
+		self.force_data.set_test( 0 )
+		force_adc = self.force_data.force_adc_converted()
+		force_serial = self.force_data.force_serial()
+		distance = self.force_data.distance_mm()
+		mid_point = self.force_data.mid_point()
+
+		# Only hide calibration if there is actual test data
+		visible = 'legendonly'
+		if self.force_data.tests == 1:
+			visible = 'true'
+
+		# TODO convert to Scattergl when less buggy -HaaTa
+		if 0 in self.force_data.curves:
+			graphs.extend([
+				Scatter(
+					x=distance[:mid_point],
+					y=force_serial[:mid_point],
+					name="RS232 (Cal) Press",
+					legendgroup='rs232',
+					line={
+						'width' : plot_data['line_width'],
+					},
+					visible=visible,
+				),
+				Scatter(
+					x=distance[mid_point:],
+					y=force_serial[mid_point:],
+					name="RS232 (Cal) Release",
+					legendgroup='rs232',
+					line={
+						'width' : plot_data['line_width'],
+					},
+					visible=visible,
+				),
+				Scatter(
+					x=distance[:mid_point],
+					y=force_adc[:mid_point],
+					name="Analog (Cal) Press",
+					legendgroup='analog',
+					line={
+						'width' : plot_data['line_width'],
+					},
+					visible=visible,
+				),
+				Scatter(
+					x=distance[mid_point:],
+					y=force_adc[mid_point:],
+					name="Analog (Cal) Release",
+					legendgroup='analog',
+					line={
+						'width' : plot_data['line_width'],
+					},
+					visible=visible,
+				),
+			])
+		pass
+
+	def process_graphs( self, graphs, annotations ):
+		'''
+		Generates the non-calibration graphs
+		'''
+		from plotly.graph_objs import Layout, Scatter, Scattergl
+
+		# Retrieve misc info about force curve(s)
+		plot_data = self.force_data.get_var('extra_info')
+
+		# Switch
+		switch = self.force_data.cur_switch
+
+		curves = [ curve for curve in self.force_data.curves if curve != 0 ]
+		for index in curves:
+			self.force_data.set_test( index )
+			mid_point = self.force_data.mid_point_dir()
+			force_adc = self.force_data.force_adc_converted()
+			distance = self.force_data.distance_mm()
+			actuation = self.force_data.actuation()
+
+			# Only show the number on the legend if necessary
+			number = " {0}".format( index )
+			if self.force_data.tests == 2:
+				number = ""
+
+			# If more than one switch, add the name as well
+			name = ""
+			if self.force_data.switches > 1:
+				name = "{0}</br>".format( plot_data['test_name'] )
+
+			# Only show if not disabled
+			if self.force_data.press_disable is False:
+				graphs.extend([
+					Scatter(
+						x=distance[:mid_point],
+						y=force_adc[:mid_point],
+						name="{0}Press{1}".format( name, number ),
+						legendgroup='test{0}-{1}'.format( switch, index ),
+						line={
+							'width' : plot_data['line_width'],
+						},
+					)
+				])
+
+			# Only show if not disabled
+			if self.force_data.release_disable is False:
+				graphs.extend([
+					Scatter(
+						x=distance[mid_point:],
+						y=force_adc[mid_point:],
+						name="{0}Release{1}".format( name, number ),
+						legendgroup='test{0}-{1}'.format( switch, index ),
+						line={
+							'width' : plot_data['line_width'],
+						},
+					),
+				])
+
+			# Press
+			if len( actuation ) > 0 and index == 1 and self.force_data.press_disable is False:
+				annotations.extend([{
+					'text' : '{0}Press'.format( name ),
+					'font': {
+						'color': 'rgb(37, 37, 37)',
+						'family': 'Open Sans, sans-serif',
+						'size': 24,
+					},
+					'x': distance[ actuation[0] ],
+					'y': force_adc[ actuation[0] ],
+					'xref' : 'x',
+					'yref' : 'y',
+					'showarrow' : True,
+					'arrowhead' : 7,
+					'arrowcolor' : 'rgb(88, 156, 189)',
+					'ax' : 0,
+					'ay' : -70,
+				}])
+
+			# Release
+			if len( actuation ) > 1 and index == 1 and self.force_data.release_disable is False:
+				annotations.extend([{
+					'text' : '{0}Release'.format( name ),
+					'font': {
+						'color': 'rgb(37, 37, 37)',
+						'family': 'Open Sans, sans-serif',
+						'size': 24,
+					},
+					'x': distance[ actuation[1] ],
+					'y': force_adc[ actuation[1] ],
+					'xref' : 'x',
+					'yref' : 'y',
+					'showarrow' : True,
+					'arrowhead' : 7,
+					'arrowcolor' : 'rgb(232, 174, 90)',
+					'ax' : 0,
+					'ay' : 70,
+				}])
+		pass
+
 	def process_output( self ):
 		'''
 		Output force data from force_data structure to the output file
 		'''
 		import plotly.offline as py
-		from plotly.graph_objs import Layout, Scatter, Scattergl
 
 		# Retrieve misc info about force curve(s)
-		plot_data = self.force_data.extra_info
+		plot_data = self.force_data.get_var('extra_info')
+
+		# If more than one switch, use a different title
+		title = "{0} Switch".format( plot_data['test_name'] )
+		if self.force_data.switches > 1:
+			title = "Switch Comparison"
+
+		# List switches in description
+		test_names = []
+		for sw in range( 0, self.force_data.switches ):
+			self.force_data.set_switch( sw )
+			test_names.append( self.force_data.get_var('extra_info')['test_name'] )
+		description_names = '</br>'.join( test_names )
+		self.force_data.set_switch( 0 )
 
 		# Graph infobox
 		info_box = {
@@ -823,7 +1217,7 @@ class PlotlyForceData( GenericForceData ):
 				'{1}</br>'
 				'<a href="{2}">{3}</a></br>'
 				'{4}'.format(
-					plot_data['test_name'],
+					description_names,
 					plot_data['info_box_desc'],
 					plot_data['url'], plot_data['nick'],
 					plot_data['updated']
@@ -850,135 +1244,18 @@ class PlotlyForceData( GenericForceData ):
 			info_box,
 		]
 
-		# Acquire calibration data
-		self.force_data.set_test( 0 )
-		force_adc = self.force_data.force_adc_converted()
-		force_serial = self.force_data.force_serial()
-		distance = self.force_data.distance_mm()
-		mid_point = self.force_data.mid_point()
-
-		# Only hide calibration if there is actual test data
-		visible = 'legendonly'
-		if self.force_data.tests == 1:
-			visible = 'true'
-
 		# Setup calibration graphs
-		# TODO convert to Scattergl when less buggy -HaaTa
-		graphs = [
-			Scatter(
-				x=distance[:mid_point],
-				y=force_serial[:mid_point],
-				name="RS232 (Cal) Press",
-				legendgroup='rs232',
-				line={
-					'width' : plot_data['line_width'],
-				},
-				visible=visible,
-			),
-			Scatter(
-				x=distance[mid_point:],
-				y=force_serial[mid_point:],
-				name="RS232 (Cal) Release",
-				legendgroup='rs232',
-				line={
-					'width' : plot_data['line_width'],
-				},
-				visible=visible,
-			),
-			Scatter(
-				x=distance[:mid_point],
-				y=force_adc[:mid_point],
-				name="Analog (Cal) Press",
-				legendgroup='analog',
-				line={
-					'width' : plot_data['line_width'],
-				},
-				visible=visible,
-			),
-			Scatter(
-				x=distance[mid_point:],
-				y=force_adc[mid_point:],
-				name="Analog (Cal) Release",
-				legendgroup='analog',
-				line={
-					'width' : plot_data['line_width'],
-				},
-				visible=visible,
-			),
-		]
+		graphs = []
+		for switch in range( 0, self.force_data.switches ):
+			# Set the switch index
+			self.force_data.set_switch( switch )
+			self.process_calibration( graphs )
 
 		# Setup normal test graphs
-		for index in range( 1, self.force_data.tests ):
-			self.force_data.set_test( index )
-			mid_point = self.force_data.mid_point_dir()
-			force_adc = self.force_data.force_adc_converted()
-			distance = self.force_data.distance_mm()
-			actuation = self.force_data.actuation()
-
-			# Only show the number on the legend if necessary
-			number = " {0}".format( index )
-			if self.force_data.tests == 2:
-				number = ""
-			graphs.extend([
-				Scatter(
-					x=distance[:mid_point],
-					y=force_adc[:mid_point],
-					name="Press{0}".format( number ),
-					legendgroup='test{0}'.format( index ),
-					line={
-						'width' : plot_data['line_width'],
-					},
-				),
-				Scatter(
-					x=distance[mid_point:],
-					y=force_adc[mid_point:],
-					name="Release{0}".format( number ),
-					legendgroup='test{0}'.format( index ),
-					line={
-						'width' : plot_data['line_width'],
-					},
-				),
-			])
-
-			# Press
-			if len( actuation ) > 0:
-				annotations.extend([{
-					'text' : 'Press',
-					'font': {
-						'color': 'rgb(37, 37, 37)',
-						'family': 'Open Sans, sans-serif',
-						'size': 24,
-					},
-					'x': distance[ actuation[0] ],
-					'y': force_adc[ actuation[0] ],
-					'xref' : 'x',
-					'yref' : 'y',
-					'showarrow' : True,
-					'arrowhead' : 7,
-					'arrowcolor' : 'rgb(88, 156, 189)',
-					'ax' : 0,
-					'ay' : -70,
-				}])
-
-			# Release
-			if len( actuation ) > 1:
-				annotations.extend([{
-					'text' : 'Release',
-					'font': {
-						'color': 'rgb(37, 37, 37)',
-						'family': 'Open Sans, sans-serif',
-						'size': 24,
-					},
-					'x': distance[ actuation[1] ],
-					'y': force_adc[ actuation[1] ],
-					'xref' : 'x',
-					'yref' : 'y',
-					'showarrow' : True,
-					'arrowhead' : 7,
-					'arrowcolor' : 'rgb(232, 174, 90)',
-					'ax' : 0,
-					'ay' : 70,
-				}])
+		for switch in range( 0, self.force_data.switches ):
+			# Set the switch index
+			self.force_data.set_switch( switch )
+			self.process_graphs( graphs, annotations )
 
 		# Layout/Theme Settings
 		layout_settings = {
@@ -1013,7 +1290,7 @@ class PlotlyForceData( GenericForceData ):
 			'plot_bgcolor': '#fff',
 			'separators': '.,',
 			'showlegend': True,
-			'title': "{0} Switch".format( plot_data['test_name'] ),
+			'title': title,
 			'titlefont': {
 				'color': 'rgb(255, 255, 255)',
 				'family': 'Open Sans, sans-serif',
@@ -1029,7 +1306,7 @@ class PlotlyForceData( GenericForceData ):
 				'linecolor': 'rgb(88, 156, 189)',
 				'linewidth': 5,
 				'mirror': False,
-				'range': self.force_data.usable_distance_range,
+				'range': self.force_data.get_var('usable_distance_range'),
 				'showexponent': 'all',
 				'showgrid': True,
 				'showline': True,
@@ -1068,7 +1345,7 @@ class PlotlyForceData( GenericForceData ):
 				'linecolor': 'rgb(88, 156, 189)',
 				'linewidth': 5,
 				'mirror': 'ticks',
-				'range': self.force_data.usable_force_range,
+				'range': self.force_data.get_var('usable_force_range'),
 				'showexponent': 'all',
 				'showgrid': True,
 				'showline': True,
@@ -1120,7 +1397,7 @@ def processCommandLineArgs( force_data ):
 	'''
 	# Setup argument processor
 	pArgs = argparse.ArgumentParser(
-		usage="%(prog)s [options] <input file> <output file1> [<output file2>..]",
+		usage="%(prog)s [options] <input file1> [<output file2>..] -> <output file1> [<output file2>..]",
 		description="This script takes a given input file, imports it, then converts to the format\n"
 		"specified by the output file(s). If no extension is given, .raw is assumed.\n"
 		".gz extension is recognized, and files will be unzip while reading.\n"
@@ -1141,24 +1418,43 @@ def processCommandLineArgs( force_data ):
 		" - .png\n"
 		" - .svg\n"
 		" - plotly\n",
-		epilog="Example: {0} switch_test1.raw test1.fcv plotly test1.png".format( os.path.basename( sys.argv[0] ) ),
+		epilog="Example: {0} switch_test1.raw -> test1.fcv plotly test1.png".format( os.path.basename( sys.argv[0] ) ),
 		formatter_class=argparse.RawTextHelpFormatter,
 		add_help=False,
 	)
 
 	# Positional Arguments
-	pArgs.add_argument( 'input_file', help=argparse.SUPPRESS ) # Suppressed help output
+	pArgs.add_argument( 'input_files', nargs='+', help=argparse.SUPPRESS ) # Suppressed help output
 	pArgs.add_argument( 'output_files', nargs='+', help=argparse.SUPPRESS ) # Suppressed help output
 
 	# Optional Arguments
 	pArgs.add_argument( '-h', '--help', action="help",
 		help="This message."
 	)
+	pArgs.add_argument( '--curves', type=str,
+		help="Comma separated list of iterations to process. Will try to optimize processing time if possible (e.g. 0,4,3)"
+	)
+	pArgs.add_argument( '--no-press', action="store_true",
+		help="Disable press curves."
+	)
+	pArgs.add_argument( '--no-release', action="store_true",
+		help="Disable release curves."
+	)
 
 	# Process Arguments
 	args = pArgs.parse_args()
 
 	error = False
+
+	# Split input and output files
+	input_files = args.input_files
+	output_files = args.output_files
+
+	# Build list of curves to process
+	curves = [ int( num ) for num in args.curves.split(',') ]
+
+	# Set force data options
+	force_data.set_options( curves, args.no_press, args.no_release )
 
 	# Get list of available classes
 	classes = inspect.getmembers( sys.modules[ __name__ ], inspect.isclass )
@@ -1172,27 +1468,30 @@ def processCommandLineArgs( force_data ):
 		'.png'  : 'PNGForceData',
 		'.svg'  : 'SVGForceData',
 	}
-	input_filename = args.input_file
-	split = os.path.splitext( input_filename )
-	ext = split[1]
-
-	# Check if .gz file
-	if split[1] == '.gz':
-		ext = os.path.splitext( split[0] )[1]
-
-	# Raw is handled differently as it's only an input
 	inputs = []
-	if ext == '.raw':
-		inputs.append( RawForceData( force_data, input_filename ) )
+	for filename in input_files:
+		split = os.path.splitext( filename )
+		ext = split[1]
 
-	elif ext not in valid_input_ext.keys():
-		print( "{0} '{1}' is an invalid input extension in '{2}'".format( ERROR, ext, input_filename ) )
-		error = True
+		# Setup datastructure for switch
+		force_data.set_switch( force_data.switches )
 
-	else:
-		# Initialize input object
-		class_object = [ cl for cl in classes if cl[0] == valid_input_ext[ ext ] ][0][1]
-		inputs.append( class_object( force_data, input_filename, None ) )
+		# Check if .gz file
+		if split[1] == '.gz':
+			ext = os.path.splitext( split[0] )[1]
+
+		# Raw is handled differently as it's only an input
+		if ext == '.raw':
+			inputs.append( RawForceData( force_data, filename ) )
+
+		elif ext not in valid_input_ext.keys():
+			print( "{0} '{1}' is an invalid input extension in '{2}'".format( ERROR, ext, filename ) )
+			error = True
+
+		else:
+			# Initialize input object
+			class_object = [ cl for cl in classes if cl[0] == valid_input_ext[ ext ] ][0][1]
+			inputs.append( class_object( force_data, filename, None ) )
 
 	# Determine each type of output
 	valid_output_ext = {
@@ -1204,7 +1503,7 @@ def processCommandLineArgs( force_data ):
 		'.svg'  : 'SVGForceData',
 	}
 	outputs = []
-	for filename in args.output_files:
+	for filename in output_files:
 
 		# Make sure extension is valid
 		if filename != 'plotly':
@@ -1248,24 +1547,31 @@ def processCommandLineArgs( force_data ):
 ### Main ###
 
 if __name__ == '__main__':
-	forcedata = ForceData()
+	force_data = ForceData()
 
 	# Process args
-	input_objects, output_objects = processCommandLineArgs( forcedata )
+	input_objects, output_objects = processCommandLineArgs( force_data )
 
 	# Process input objects
 	print ("Input Files")
+	switch = 0
 	for obj in input_objects:
+		print ( "-- {0} --".format( obj.input_file ) )
+		force_data.set_switch( switch )
 		obj.process_input()
+		switch += 1
 
 	# Analysis
 	print ("Analysis")
-	forcedata.set_test( 0 )
-	forcedata.calibration_analysis()
+	force_data.set_test( 0 )
+	for index in range( force_data.switches ):
+		force_data.set_switch( index )
+		force_data.calibration_analysis()
 
 	# Process output objects
 	print ("Output Files")
 	for obj in output_objects:
+		print ( "-- {0} --".format( obj.output_file ) )
 		obj.process_output()
 
 	# Successful Execution

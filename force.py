@@ -265,6 +265,30 @@ def decode_data( data ):
 		# Find null terminated portion (or entire)
 		return bytearray( data[1:] ).split( b'\x00' )[0].decode("utf-8")
 
+def json_write():
+	'''
+	Generate skeleton json file
+	'''
+	# TODO parameterize more
+	info = {
+		"test_name" : forcecurve_base_filename.replace('_', ' '),
+		"base_filename" : forcecurve_base_filename,
+		"info_box_desc"  : "",
+		"line_width" : 3,
+		"description" : [
+			"",
+		],
+		"created" : date.today().isoformat(),
+		"updated" : date.today().isoformat(),
+		"author" : "Jacob Alexander",
+		"nick" : "HaaTa",
+		"url" : "http://kiibohd.com",
+
+	}
+	outfile = open( "{0}.json".format( forcecurve_base_filename ), 'w' )
+	json.dump( info, outfile, indent='\t', separators=( ',', ' : ' ) )
+	outfile.close()
+
 def reinit_read():
 	'''
 	Reads data from force gauge microcontroller
@@ -311,28 +335,15 @@ def reinit_read():
 				outfile.close()
 				write_file = False
 
-				# Generate skeleton json file
-				# TODO parameterize more
-				info = {
-					"test_name" : forcecurve_base_filename.replace('_', ' '),
-					"base_filename" : forcecurve_base_filename,
-					"info_box_desc"  : "",
-					"line_width" : 3,
-					"description" : [
-						"",
-					],
-					"created" : date.today().isoformat(),
-					"updated" : date.today().isoformat(),
-					"author" : "Jacob Alexander",
-					"nick" : "HaaTa",
-					"url" : "http://kiibohd.com",
-
-				}
-				outfile = open( "{0}.json".format( forcecurve_base_filename ), 'w' )
-				json.dump( info, outfile, indent='\t', separators=( ',', ' : ' ) )
-				outfile.close()
+				# Write out json description
+				json_write()
 
 				break
+
+	except KeyboardInterrupt:
+		# If we cancel in the middle of a test, still write out the json
+		if write_file:
+			json_write()
 
 	except usb.core.USBError:
 		# Cleanup first
