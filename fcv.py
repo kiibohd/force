@@ -40,6 +40,7 @@ fcv format conversion and analysis script
 ### Imports ###
 
 from collections import namedtuple
+from datetime    import date
 
 import argparse
 import inspect
@@ -198,13 +199,11 @@ class ForceData:
 		'''
 		self.data[ self.cur_switch ][ name ] = value
 
-	def set_options( self, curves, press_disable, release_disable ):
+	def set_options( self, options ):
 		'''
 		Various options set by the command line
 		'''
-		self.curves = curves
-		self.press_disable = press_disable
-		self.release_disable = release_disable
+		self.options = options
 
 	def set_switch( self, num ):
 		'''
@@ -317,13 +316,13 @@ class ForceData:
 			press_analysis.append( point )
 
 		press_force_adc_serial_factor = statistics.median_grouped(
-				[ elem.force_adc_serial_factor for elem in press_analysis ]
+			[ elem.force_adc_serial_factor for elem in press_analysis ]
 		)
 
 		# Release calibration
 		release_difference = self.cal_adc_release_center - self.cal_serial_release_center
 		release_analysis = []
-		#for index in range( 
+		#for index in range(
 		for index in range( midpoint - abs( release_difference ), len( self.get('test') ) - abs( release_difference ) ):
 			data_adc = self.get('test')[ index ]
 			data_serial = self.get('test')[ index + release_difference ]
@@ -381,24 +380,124 @@ class ForceData:
 		# Determine distance range, use raw adc values from press
 		adc_diff = list( np.diff( [ elem.force_adc for elem in self.get('test')[ :self.mid_point() ] ] ) )
 		peaks = peakdet( adc_diff, 200 )[0] # TODO configurable delta and forced range
-		first = adc_diff.index( peaks[0][1] )
+
+		# XXX Use the peak_detection_index configuration in the json to tweak peak detection
+		# Otherwise just use the first peak
+		plot_data = self.get_var('extra_info')
+		if 'peak_detection_index' in plot_data.keys():
+			peak_index = plot_data['peak_detection_index']
+		else:
+			peak_index = 0
+
+		first = adc_diff.index( peaks[ peak_index ][1] )
 		last = adc_diff.index( peaks[-1][1] )
 
 		# Use the max force as 2x the median grouped force over the newly calculated distance range (press)
-		# TODO configurable
 		force_data = self.force_adc_converted()[ first:last ]
-		self.set_var('usable_force_range', ( ( 0, statistics.median_grouped( force_data ) * 2 ) ) )
+		max_force_calc = statistics.median_grouped( force_data ) * 2
+		self.set_var('usable_force_range', ( ( 0, max_force_calc ) ) )
 
-		# Round up/down to the nearst int
+		# Start from beginning of press + 1/4 mm
+		# TODO peak detection algorith has issues with exponential force curves -Jacob
+		# TODO use calibration data for start of press instead of first -Jacob
 		dist_mm = self.distance_mm()
-		#self.usable_distance_range = ( math.ceil( dist_mm[ first ] ), math.floor( dist_mm[ last ] ) ) # XXX Technically better, but doesn't look as good -HaaTa
-		self.set_var('usable_distance_range', ( math.ceil( dist_mm[ first ] ), 0 ) )
+		start_mm = dist_mm[ first ] + 0.25
+		print ( start_mm )
+		self.set_var('usable_distance_range', ( start_mm, 0 ) )
+
+
+	def curve_analysis( self ):
+		'''
+		Runs analysis on each recorded force curve (including calibration)
+		Order matters, as each analysis stage may provide the next with needed data
+
+		Analysis Computed
+		1. Distance Points/Ranges
+		2. Force Points/Ranges
+		'''
+		# Iterate over each set of test data, and do analysis
+		for index in self.options['curves']:
+			# Set datastructures for given test
+			self.set_test( index )
+
+			# Run analysis
+			self.curve_analysis_distance()
+			self.curve_analysis_force()
+
+	def curve_analysis_distance( self ):
+		'''
+		-- Distance Analysis --
+		Rest       Point - Start of press, when force goes from noise-zero to increase
+		Actuation  Point - Distance when switch goes from off to on state
+		Release    Range - Distance range between acutation and bottom-out
+		Bottom-out Point - End of press, just before force goes to ~infinity
+		Reset      Point - Distance when switch goes from on to off state
+		Repeat     Range - Distance range between reset and rest
+
+		Each analysis value is accompanied by a dataset index, to easily map force vs. distance
+		( index, ( force, distance ) )
+		'''
+		distance = self.distance_mm()
+		force_adc = self.force_adc_converted()
+
+		# Rest Point
+		# TODO - Algorithm
+		rest_point = None
+
+		# Actuation and Reset Points
+		actuation = self.actuation()
+		if len( actuation ) > 0:
+			actuation_point = ( actuation[0], ( force_adc[ actuation[0] ], distance[ actuation[0] ] ) )
+			reset_point = ( actuation[1], ( force_adc[ actuation[1] ], distance[ actuation[1] ] ) )
+		else:
+			actuation_point = None
+			reset_point = None
+
+		# Bottom-out Point
+		# TODO - Algorithm
+		bottom_out_point = None
+
+		# Store analysis with test
+		self.set('rest_point', rest_point )
+		self.set('actuation_point', actuation_point )
+		self.set('release_range', ( actuation_point, bottom_out_point ) )
+		self.set('bottom_out_point', bottom_out_point )
+		self.set('reset_point', reset_point )
+		self.set('repeat_range', ( reset_point, rest_point ) )
+
+	def curve_analysis_force( self ):
+		'''
+		-- Force Analysis --
+		Acuation   Force - Force when switch goes from off to on state
+		Reset      Force - Force when switch goes from on to off state
+		Bottom-out Force - End of press, force just before peaking towards infinity
+		Pre-load   Force - Beginning of press, just after the press has started
+
+		Each analysis value is accompanied by a dataset index, to easily map force vs. distance
+		( index, ( force, distance ) )
+		'''
+		distance = self.distance_mm()
+		force_adc = self.force_adc_converted()
+
+		# Pre-load Force
+		# TODO - Algorithm
+		pre_load_force = 0
+
+		# Bottom-out force
+		bottom_out_point = self.get('bottom_out_point')
+		bottom_out_force = ( bottom_out_point[0], force_adc[ bottom_out_point[0] ] )
+
+		# Store analysis with test
+		self.set('actuation_force', self.get('actuation_point') )
+		self.set('reset_force', self.get('reset_point') )
+		self.set('bottom_out_force', bottom_out_force )
+		self.set('pre_load_force', pre_load_force )
 
 
 	def max_force_points_converted( self ):
 		'''
 		Returns a tuple of the distance ticks for the max force points
-		These values are interpolated, so don't bother tryign to look them up in the dataset
+		These values are interpolated, so don't bother trying to look them up in the dataset
 
 		Ideally, this calculation only needs to be done on the calibration data.
 		Unfortunately, some datasets...are less clean, so it's recommended to run on each press/release pair
@@ -408,18 +507,20 @@ class ForceData:
 		# This is used in the conversion to mm needed for the usable_distance_range
 		# Using the approximate points, interpolate to find the point we want
 		# dist = dist_1 + (dist_2 - dist_1)( (force - force_1) / (force_2 - force_1) )
+		max_force_calc = self.get_var('usable_force_range')[1]
+		#print( "MAX FORCE: ", max_force_calc )
 
 		# Press "wave"
 		conv_factor = self.get_var('force_adc_serial_factor')[0]
 		press_max_force_index = [
 			index
 			for index, value in enumerate( self.get('test') )
-			if value.force_adc / conv_factor > self.get_var('usable_force_range')[1]
+			if value.force_adc / conv_factor > max_force_calc
 		][0]
 		point1 = self.get('test')[ press_max_force_index - 1 ]
 		point2 = self.get('test')[ press_max_force_index ]
 		press_max = point1.distance + ( point2.distance - point1.distance ) * (
-			(self.get_var('usable_force_range')[1] - point1.force_adc / conv_factor) /
+			(max_force_calc - point1.force_adc / conv_factor) /
 			(point2.force_adc / conv_factor - point1.force_adc / conv_factor)
 		)
 
@@ -428,12 +529,12 @@ class ForceData:
 		release_max_force_index = [
 			index
 			for index, value in reversed( list( enumerate( self.get('test') ) ) )
-			if value.force_adc / conv_factor > self.get_var('usable_force_range')[1]
+			if value.force_adc / conv_factor > max_force_calc
 		][0]
 		point1 = self.get('test')[ release_max_force_index - 1 ]
 		point2 = self.get('test')[ release_max_force_index ]
 		release_max = point1.distance + ( point2.distance - point1.distance ) * (
-			(self.get_var('usable_force_range')[1] - point1.force_adc / conv_factor) /
+			(max_force_calc - point1.force_adc / conv_factor) /
 			(point2.force_adc / conv_factor - point1.force_adc / conv_factor)
 		)
 
@@ -512,6 +613,10 @@ class ForceData:
 		release = [ (data.distance - zero_point_release) * mm_conv for data in self.get('test')[mid_point:] ]
 
 		press.extend( release )
+
+		# Flip the distance axis at 4 mm
+		max_mm = 4
+		press = [ (point - max_mm) * -1 for point in press ]
 
 		# Make sure distance points are sequential
 		# 3 point, 2 differences (Naive -HaaTa)
@@ -773,7 +878,7 @@ class RawForceData( GenericForceData ):
 		self.cur_test += 1
 
 		# Check if we can stop processing
-		if self.cur_test > max( self.force_data.curves ):
+		if self.cur_test > max( self.force_data.options['curves'] ):
 			print ( "Skipping Test #{0}".format( self.cur_test ) )
 			return False
 
@@ -889,7 +994,6 @@ class RawForceData( GenericForceData ):
 					self.data_point_cache[1].force_serial,
 					self.data_point_cache[1].continuity,
 					self.data_point_cache[1].direction,
-
 				)
 
 				# Add point to data store
@@ -900,9 +1004,6 @@ class RawForceData( GenericForceData ):
 
 		# Add to cache
 		self.data_point_cache.append( data_point )
-
-		# XXX Old, add all points to line
-		#self.force_data.add( data_point )
 
 	def process_input( self ):
 		'''
@@ -1025,8 +1126,7 @@ class PlotlyForceData( GenericForceData ):
 		'''
 		Generates the calibration graphs
 		'''
-		from plotly.graph_objs import Layout, Scatter, Scattergl
-		import numpy as np
+		from plotly.graph_objs import Scatter
 
 		# Retrieve misc info about force curve(s)
 		plot_data = self.force_data.get_var('extra_info')
@@ -1043,8 +1143,8 @@ class PlotlyForceData( GenericForceData ):
 		if self.force_data.tests == 1:
 			visible = 'true'
 
-		# TODO convert to Scattergl when less buggy -HaaTa
-		if 0 in self.force_data.curves:
+		# TODO convert to Scatter when less buggy -HaaTa
+		if 0 in self.force_data.options['curves']:
 			graphs.extend([
 				Scatter(
 					x=distance[:mid_point],
@@ -1087,13 +1187,12 @@ class PlotlyForceData( GenericForceData ):
 					visible=visible,
 				),
 			])
-		pass
 
 	def process_graphs( self, graphs, annotations ):
 		'''
 		Generates the non-calibration graphs
 		'''
-		from plotly.graph_objs import Layout, Scatter, Scattergl
+		from plotly.graph_objs import Scatter
 
 		# Retrieve misc info about force curve(s)
 		plot_data = self.force_data.get_var('extra_info')
@@ -1101,12 +1200,19 @@ class PlotlyForceData( GenericForceData ):
 		# Switch
 		switch = self.force_data.cur_switch
 
-		curves = [ curve for curve in self.force_data.curves if curve != 0 ]
+		curves = [ curve for curve in self.force_data.options['curves'] if curve != 0 ]
 		for index in curves:
 			self.force_data.set_test( index )
 			mid_point = self.force_data.mid_point_dir()
 			force_adc = self.force_data.force_adc_converted()
-			distance = self.force_data.distance_mm()
+
+			try:
+				distance = self.force_data.distance_mm()
+			except IndexError as err:
+				print( "SKIPPING #{0}".format( index ) )
+				print( err )
+				distance = [ 0 * len( force_adc ) ]
+
 			actuation = self.force_data.actuation()
 
 			# Only show the number on the legend if necessary
@@ -1119,8 +1225,13 @@ class PlotlyForceData( GenericForceData ):
 			if self.force_data.switches > 1:
 				name = "{0}</br>".format( plot_data['test_name'] )
 
+			# Only hide curve if specified
+			visible = 'true'
+			if index in self.force_data.options['curves_hidden']:
+				visible = 'legendonly'
+
 			# Only show if not disabled
-			if self.force_data.press_disable is False:
+			if self.force_data.options['press_disable'] is False:
 				graphs.extend([
 					Scatter(
 						x=distance[:mid_point],
@@ -1130,11 +1241,12 @@ class PlotlyForceData( GenericForceData ):
 						line={
 							'width' : plot_data['line_width'],
 						},
+						visible=visible,
 					)
 				])
 
 			# Only show if not disabled
-			if self.force_data.release_disable is False:
+			if self.force_data.options['release_disable'] is False:
 				graphs.extend([
 					Scatter(
 						x=distance[mid_point:],
@@ -1144,11 +1256,12 @@ class PlotlyForceData( GenericForceData ):
 						line={
 							'width' : plot_data['line_width'],
 						},
+						visible=visible,
 					),
 				])
 
 			# Press
-			if len( actuation ) > 0 and index == 1 and self.force_data.press_disable is False:
+			if len( actuation ) > 0 and index == 1 and self.force_data.options['press_disable'] is False:
 				annotations.extend([{
 					'text' : '{0}Press'.format( name ),
 					'font': {
@@ -1168,7 +1281,7 @@ class PlotlyForceData( GenericForceData ):
 				}])
 
 			# Release
-			if len( actuation ) > 1 and index == 1 and self.force_data.release_disable is False:
+			if len( actuation ) > 1 and index == 1 and self.force_data.options['release_disable'] is False:
 				annotations.extend([{
 					'text' : '{0}Release'.format( name ),
 					'font': {
@@ -1183,22 +1296,215 @@ class PlotlyForceData( GenericForceData ):
 					'showarrow' : True,
 					'arrowhead' : 7,
 					'arrowcolor' : 'rgb(232, 174, 90)',
-					'ax' : 0,
-					'ay' : 70,
+					'ax' : 70,
+					'ay' : 0,
 				}])
-		pass
+
+	def process_annotations( self, graphs, annotations ):
+		'''
+		Use force curve analysis to generate annotations
+		If not all data is present (such as actuation), not all annotations will be generated
+
+		Annotation is ignored, if field is None
+		'''
+		from plotly.graph_objs import Scatter
+
+		# Retrieve misc info about force curve(s)
+		plot_data = self.force_data.get_var('extra_info')
+
+		# If more than one switch, add the name as well
+		name = ""
+		if self.force_data.switches > 1:
+			name = "{0}</br>".format( plot_data['test_name'] )
+
+		# TODO - Generate data from current test
+		# TODO - Add support for multiple data sets
+		self.force_data.set_test( 1 )
+		number = ""
+
+		# Distance annotations
+		rest_point       = self.force_data.get('rest_point')
+		actuation_point  = self.force_data.get('actuation_point')
+		release_range    = self.force_data.get('release_range')
+		bottom_out_point = self.force_data.get('bottom_out_point')
+		reset_point      = self.force_data.get('reset_point')
+		repeat_range     = self.force_data.get('repeat_range')
+
+		# Rest point - Line at distance between 0 and current force
+		if rest_point is not None:
+			graphs.extend([
+				Scatter(
+					x=[ rest_point[1][1], rest_point[1][1] ],
+					y=[ 0, rest_point[1][0] ],
+					name="{0}Rest point{1}".format( name, number ),
+					line={
+						'width' : plot_data['annotation_line_width'],
+					},
+				)
+			])
+
+		# Actuation point - Line at actuation between 0 and current force
+		if actuation_point is not None:
+			graphs.extend([
+				Scatter(
+					x=[ actuation_point[1][1], actuation_point[1][1] ],
+					y=[ 0, actuation_point[1][0] ],
+					name="{0}Actuation point{1}".format( name, number ),
+					line={
+						'width' : plot_data['annotation_line_width'],
+					},
+				)
+			])
+
+		# Release range - Filled force area between distance points
+		if release_range[0] is not None:
+			graphs.extend([
+				Scatter(
+					x=[ release_range[0][1][1], release_range[1][1][1] ],
+					y=[ release_range[0][1][0], release_range[1][1][0] ],
+					name="{0}Release range{1}".format( name, number ),
+					fill='tozeroy',
+					mode='none',
+					line={
+						'width' : plot_data['annotation_line_width'],
+					},
+				)
+			])
+
+		# Bottom-out point - Line at point before infinite force ramp, 0 and current force
+		if bottom_out_point is not None:
+			graphs.extend([
+				Scatter(
+					x=[ bottom_out_point[1][1], bottom_out_point[1][1] ],
+					y=[ 0, bottom_out_point[1][0] ],
+					name="{0}Bottom-out point{1}".format( name, number ),
+					line={
+						'width' : plot_data['annotation_line_width'],
+					},
+				)
+			])
+
+		# Reset point - Line at reset between 0 and current force
+		if reset_point is not None:
+			graphs.extend([
+				Scatter(
+					x=[ reset_point[1][1], reset_point[1][1] ],
+					y=[ 0, reset_point[1][0] ],
+					name="{0}Reset point{1}".format( name, number ),
+					line={
+						'width' : plot_data['annotation_line_width'],
+					},
+				)
+			])
+
+		# Repeat range - Filled force area between distance points
+		if repeat_range[0] is not None:
+			graphs.extend([
+				Scatter(
+					x=[ repeat_range[0][1][1], repeat_range[1][1][1] ],
+					y=[ repeat_range[0][1][0], repeat_range[1][1][0] ],
+					name="{0}Repeat range{1}".format( name, number ),
+					fill='tozeroy',
+					mode='none',
+					line={
+						'width' : plot_data['annotation_line_width'],
+					},
+				)
+			])
+
+
+		# Force annotations
+		actuation_force  = self.force_data.get('actuation_force')
+		reset_force      = self.force_data.get('reset_force')
+		bottom_out_force = self.force_data.get('bottom_out_force')
+		pre_load_force   = self.force_data.get('pre_load_force')
+
+		# Actuation force - Line at actuation between current distance and 0
+		if actuation_force is not None:
+			graphs.extend([
+				Scatter(
+					x=[ 0, actuation_force[1][1] ],
+					y=[ actuation_force[1][0], actuation_force[1][0] ],
+					name="{0}Actuation force{1}".format( name, number ),
+					line={
+						'width' : plot_data['annotation_line_width'],
+					},
+				)
+			])
+
+		# Reset force - Line at reset between current distance and 0
+		if reset_force is not None:
+			graphs.extend([
+				Scatter(
+					x=[ 0, reset_force[1][1] ],
+					y=[ reset_force[1][0], reset_force[1][0] ],
+					name="{0}Reset force{1}".format( name, number ),
+					line={
+						'width' : plot_data['annotation_line_width'],
+					},
+				)
+			])
+
+		# Bottom-out force - Line at bottom-out between current distance and 0
+		if bottom_out_force is not None:
+			graphs.extend([
+				Scatter(
+					x=[ 0, bottom_out_force[1][1] ],
+					y=[ bottom_out_force[1][0], bottom_out_force[1][0] ],
+					name="{0}Bottom-out force{1}".format( name, number ),
+					line={
+						'width' : plot_data['annotation_line_width'],
+					},
+				)
+			])
+
+		# Pre-load force - Line at peak pre-load force between current distance and 0
+		if pre_load_force is not None:
+			graphs.extend([
+				Scatter(
+					x=[ 0, pre_load_force[1][1] ],
+					y=[ pre_load_force[1][0], pre_load_force[1][0] ],
+					name="{0}Pre-load force{1}".format( name, number ),
+					line={
+						'width' : plot_data['annotation_line_width'],
+					},
+				)
+			])
+
+	def read_option_setting( self, force_var, option_var ):
+		'''
+		Attempts to get a value for the layered dictionaries.
+		First, look at the per force data json data.
+		Second, look at the default options in the configuration file.
+		'''
+		value = ""
+		if force_var in self.force_data.get_var('extra_info').keys():
+			value = self.force_data.get_var('extra_info')[ force_var ]
+		elif option_var in self.force_data.options.keys():
+			value = self.force_data.options[ option_var ]
+
+		return value
 
 	def process_output( self ):
 		'''
 		Output force data from force_data structure to the output file
 		'''
-		import plotly.offline as py
-
 		# Retrieve misc info about force curve(s)
 		plot_data = self.force_data.get_var('extra_info')
 
+		# Check if override has been set for scale ranges
+		distance_bounds = 0
+		distance_range = self.force_data.get_var('usable_distance_range')
+		force_range = self.force_data.get_var('usable_force_range')
+		if 'distance_bounds' in plot_data.keys():
+			distance_bounds = plot_data['distance_bounds']
+		if 'max_distance' in plot_data.keys():
+			distance_range = ( 0 - distance_bounds, plot_data['max_distance'] + distance_bounds )
+		if 'max_force' in plot_data.keys():
+			force_range = ( 0, plot_data['max_force'] )
+
 		# If more than one switch, use a different title
-		title = "{0} Switch".format( plot_data['test_name'] )
+		title = "{0} {1}".format( plot_data['vendor'], plot_data['popular_name'] )
 		if self.force_data.switches > 1:
 			title = "Switch Comparison"
 
@@ -1206,21 +1512,36 @@ class PlotlyForceData( GenericForceData ):
 		test_names = []
 		for sw in range( 0, self.force_data.switches ):
 			self.force_data.set_switch( sw )
-			test_names.append( self.force_data.get_var('extra_info')['test_name'] )
+			test_names.append( self.force_data.get_var('extra_info')['part'] )
 		description_names = '</br>'.join( test_names )
 		self.force_data.set_switch( 0 )
+
+		# Build name line
+		name_line = '<a href="{1}">{0}</a>@<a href="{3}">{2}</a></br>'.format(
+			self.read_option_setting( 'nick', 'default_nick' ),
+			self.read_option_setting( 'url', 'default_url' ),
+			self.read_option_setting( 'org', 'default_org' ),
+			self.read_option_setting( 'org_url', 'default_org_url' ),
+		)
+
+		# Description
+		description_box = ''
+		if plot_data['info_box_desc'] != "":
+			description_box = '{0}</br>'.format( plot_data['info_box_desc'] )
+
 
 		# Graph infobox
 		info_box = {
 			'text' :
 				'{0}</br>'
-				'{1}</br>'
-				'<a href="{2}">{3}</a></br>'
-				'{4}'.format(
+				'{1}'
+				'{2}'
+				'{3}</br>'
+				'<em>{4}</em>'.format(
 					description_names,
-					plot_data['info_box_desc'],
-					plot_data['url'], plot_data['nick'],
-					plot_data['updated']
+					description_box,
+					name_line,
+					plot_data['created'], date.today().isoformat(),
 				),
 			'bgcolor': 'rgb(255, 255, 255)',
 			'bordercolor': 'rgb(232, 174, 90)',
@@ -1231,13 +1552,15 @@ class PlotlyForceData( GenericForceData ):
 				'size': 12,
 			},
 			'align' : 'left',
-			'x': 1.06,
+			'x': 4.25,
 			'xanchor': 'right',
 			'y': 0,
 			'yanchor': 'bottom',
-			'xref' : 'paper',
-			'yref' : 'paper',
+			'xref' : 'x',
+			'yref' : 'y',
+			'showarrow' : False,
 		}
+		print ( info_box['text'] )
 
 		# Annotations
 		annotations = [
@@ -1257,6 +1580,12 @@ class PlotlyForceData( GenericForceData ):
 			self.force_data.set_switch( switch )
 			self.process_graphs( graphs, annotations )
 
+		# Setup graph analysis annotations
+		for switch in range( 0, self.force_data.switches ):
+			# Set the switch index
+			self.force_data.set_switch( switch )
+			#self.process_annotations( graphs, annotations )
+
 		# Layout/Theme Settings
 		layout_settings = {
 			'annotations' : annotations,
@@ -1269,18 +1598,19 @@ class PlotlyForceData( GenericForceData ):
 			'hidesources': False,
 			'hovermode': 'x',
 			'legend': {
-				'bgcolor': 'rgb(255, 255, 255)',
-				'bordercolor': 'rgb(88, 156, 189)',
-				'borderwidth': 4,
+				'bgcolor': 'rgba(0, 0, 0, 0)',
+				'bordercolor': 'rgba(0, 0, 0, 0)',
+				'borderwidth': 10,
 				'font': {
 					'color': 'rgb(37, 37, 37)',
 					'family': 'Open Sans, sans-serif',
 					'size': 12
 				},
 				'traceorder': 'normal',
-				'x': 1.11,
-				'xanchor': 'right',
+				'x': 0.0,
+				'xanchor': 'center',
 				'y': 1,
+				'orientation': 'h',
 				'yanchor': 'top'
 			},
 			'margin': {
@@ -1306,10 +1636,10 @@ class PlotlyForceData( GenericForceData ):
 				'linecolor': 'rgb(88, 156, 189)',
 				'linewidth': 5,
 				'mirror': False,
-				'range': self.force_data.get_var('usable_distance_range'),
+				'range': distance_range,
 				'showexponent': 'all',
 				'showgrid': True,
-				'showline': True,
+				'showline': False,
 				'showticklabels': True,
 				'tick0': 0,
 				'tickangle': 'auto',
@@ -1345,10 +1675,10 @@ class PlotlyForceData( GenericForceData ):
 				'linecolor': 'rgb(88, 156, 189)',
 				'linewidth': 5,
 				'mirror': 'ticks',
-				'range': self.force_data.get_var('usable_force_range'),
+				'range': force_range,
 				'showexponent': 'all',
 				'showgrid': True,
-				'showline': True,
+				'showline': False,
 				'showticklabels': True,
 				'side': 'left',
 				'tick0': 0,
@@ -1382,7 +1712,34 @@ class PlotlyForceData( GenericForceData ):
 			'layout'      : layout_settings,
 		}
 
-		py.plot( force_curve, filename="{0}.html".format( plot_data['base_filename'] ), )
+		# Generate filename based off of json data
+		directory = "{0} Switches".format( plot_data['vendor'] )
+		filename = "{0}/{1} {2} {3}".format(
+			directory,
+			plot_data['vendor'],
+			plot_data['popular_name'],
+			plot_data['part']
+		)
+
+		# Determine which upload API to use
+		# Upload to plotly, overwrites if filename already exists
+		if self.force_data.options['upload']:
+			import plotly.plotly as py
+			py.sign_in( self.force_data.options['plotly_user'], self.force_data.options['plotly_api_key'] )
+
+		# Offline viewer (has option to upload)
+		else:
+			import plotly.offline as py
+
+			# Append .html
+			filename = "{0}.html".format( filename )
+
+			# Make sure folder exists
+			os.makedirs( directory, exist_ok=True )
+
+		# Plot
+		print( filename )
+		py.plot( force_curve, filename=filename )
 
 
 
@@ -1390,6 +1747,19 @@ class PlotlyForceData( GenericForceData ):
 
 
 ### Argument Processing ###
+
+def arg_set( arg, value_dict, name, default, override=None ):
+	'''
+	Checks if value is evaluated as Python "true"
+	If so, use the arg in the dictionary, otherwise set to default
+	'''
+	if arg:
+		if override is not None:
+			value_dict[ name ] = override
+		else:
+			value_dict[ name ] = arg
+	elif name not in value_dict.keys():
+		value_dict[ name ] = default
 
 def processCommandLineArgs( force_data ):
 	'''
@@ -1440,6 +1810,16 @@ def processCommandLineArgs( force_data ):
 	pArgs.add_argument( '--no-release', action="store_true",
 		help="Disable release curves."
 	)
+	pArgs.add_argument( '--upload', action="store_true",
+		help="Uploads processed to remote location. e.g. Plotly"
+	)
+	pArgs.add_argument( '--annotations', action="store_true",
+		help="Apply annotions to graph."
+	)
+	pArgs.add_argument( '-c', '--config', type=str,
+		default=os.path.expanduser("~/.config/fcv_config.json"),
+		help="Path to a json configuration file."
+	)
 
 	# Process Arguments
 	args = pArgs.parse_args()
@@ -1451,10 +1831,29 @@ def processCommandLineArgs( force_data ):
 	output_files = args.output_files
 
 	# Build list of curves to process
-	curves = [ int( num ) for num in args.curves.split(',') ]
+	curves = range(5) # TODO should be a range which matches the number of total curves
+	if args.curves is not None:
+		curves = [ int( num ) for num in args.curves.split(',') ]
+
+	# Fill in default options
+	options = {}
+	if os.path.exists( args.config ):
+		import json
+		with open( args.config ) as fp:
+			options = json.load( fp )
+		pass
+	else:
+		print( "{0} '{1}' doesn't exist, config file will not be used.".format( WARNING, args.config ) )
+
+	# Check if options were setA
+	arg_set( args.annotations, options, 'annotations', False )
+	arg_set( args.curves, options, 'curves', curves, curves )
+	arg_set( args.no_press, options, 'press_disable', False )
+	arg_set( args.no_release, options, 'release_disable', False )
+	arg_set( args.upload, options, 'upload', False )
 
 	# Set force data options
-	force_data.set_options( curves, args.no_press, args.no_release )
+	force_data.set_options( options )
 
 	# Get list of available classes
 	classes = inspect.getmembers( sys.modules[ __name__ ], inspect.isclass )
@@ -1561,12 +1960,19 @@ if __name__ == '__main__':
 		obj.process_input()
 		switch += 1
 
-	# Analysis
-	print ("Analysis")
+	# Calibration
+	print ("Calibration Analysis")
 	force_data.set_test( 0 )
 	for index in range( force_data.switches ):
 		force_data.set_switch( index )
 		force_data.calibration_analysis()
+
+	# Analysis
+	print ("Curve Analysis")
+	for index in range( force_data.switches ):
+		force_data.set_switch( index )
+		# TODO
+	#	force_data.curve_analysis()
 
 	# Process output objects
 	print ("Output Files")

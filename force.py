@@ -264,6 +264,9 @@ def decode_data( data ):
 	elif data[0] == ord('M'):
 		# Find null terminated portion (or entire)
 		return bytearray( data[1:] ).split( b'\x00' )[0].decode("utf-8")
+	else:
+		print( data )
+		raise
 
 def json_write():
 	'''
@@ -278,12 +281,17 @@ def json_write():
 		"description" : [
 			"",
 		],
+		"vendor" : "",
+		"part" : "",
+		"popular_name" : "",
 		"created" : date.today().isoformat(),
 		"updated" : date.today().isoformat(),
-		"author" : "Jacob Alexander",
-		"nick" : "HaaTa",
-		"url" : "http://kiibohd.com",
-
+		"author" : "",
+		"nick" : "",
+		"url" : "",
+		"max_force" : 120,
+		"max_distance" : 4,
+		"distance_bounds" : 0.25,
 	}
 	outfile = open( "{0}.json".format( forcecurve_base_filename ), 'w' )
 	json.dump( info, outfile, indent='\t', separators=( ',', ' : ' ) )

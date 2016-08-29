@@ -132,6 +132,7 @@ inline int Output_putstr( char* str )
 	return usb_serial_write( str, count );
 }
 
+
 // USB RawIO buffer available
 inline unsigned int Output_rawio_availablechar()
 {

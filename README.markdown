@@ -9,7 +9,7 @@ While this firmware is open, the hardware to build a proper force curve gauge is
 Supported Hardware
 ------------------
 
-* Image Force Gauges (Analog Out)
+* Imada Force Gauges (Analog Out)
 * iGaging 35-712-P
 * AEL-200-500N Motorized Force Stand
 

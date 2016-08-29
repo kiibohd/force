@@ -26,6 +26,7 @@
 
 // Project Includes
 #include <Lib/OutputLib.h>
+#include <print.h>
 
 // Local Includes
 #include "usb_dev.h"
@@ -74,7 +75,10 @@ int32_t usb_rawio_rx( void *buf, uint32_t timeout )
 
 		// Check for timeout
 		if ( millis() - begin > timeout || !timeout )
+		{
+			warn_msg("RAWIO Rx - Timeout, dropping packet.");
 			return 0;
+		}
 
 		yield();
 	}
@@ -112,7 +116,10 @@ int32_t usb_rawio_tx( const void *buf, uint32_t timeout )
 
 		// Check for timeout
 		if ( millis() - begin > timeout )
+		{
+			warn_msg("RAWIO Tx - Timeout, dropping packet.");
 			return 0;
+		}
 
 		yield();
 	}
