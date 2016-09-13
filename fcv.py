@@ -252,7 +252,6 @@ class ForceData:
 		'''
 		Analysis collected from calibration data
 		'''
-		import math
 		import numpy as np
 		import statistics
 
@@ -1543,21 +1542,23 @@ class PlotlyForceData( GenericForceData ):
 					name_line,
 					plot_data['created'], date.today().isoformat(),
 				),
-			'bgcolor': 'rgb(255, 255, 255)',
-			'bordercolor': 'rgb(232, 174, 90)',
+			'bgcolor': 'rgba(0, 0, 0, 0)',
+			'bordercolor': 'rgba(0, 0, 0, 0)',
 			'borderwidth': 4,
+			'borderpad': 0,
+			'opacity': 1,
 			'font': {
 				'color': 'rgb(37, 37, 37)',
 				'family': 'Open Sans, sans-serif',
 				'size': 12,
 			},
 			'align' : 'left',
-			'x': 4.25,
+			'x': 1,
 			'xanchor': 'right',
 			'y': 0,
 			'yanchor': 'bottom',
-			'xref' : 'x',
-			'yref' : 'y',
+			'xref' : 'paper',
+			'yref' : 'paper',
 			'showarrow' : False,
 		}
 		print ( info_box['text'] )
@@ -1614,7 +1615,12 @@ class PlotlyForceData( GenericForceData ):
 				'yanchor': 'top'
 			},
 			'margin': {
-				'pad': 0, 't': 110
+				'pad': 15,
+				't': 80,
+				'l': 60,
+				'r': 60,
+				'b': 60,
+				'autoexpand' : True
 			},
 			'paper_bgcolor': 'rgb(37, 37, 37)',
 			'plot_bgcolor': '#fff',
@@ -1628,7 +1634,7 @@ class PlotlyForceData( GenericForceData ):
 			},
 			'xaxis': {
 				'autorange': False,
-				'domain': [0.01, 0.99],
+				'domain': [0, 1],
 				'dtick': 1,
 				'exponentformat': 'B',
 				'gridcolor': '#eee',
@@ -1667,7 +1673,7 @@ class PlotlyForceData( GenericForceData ):
 			'yaxis': {
 				'anchor': 'x',
 				'autorange': False,
-				'domain': [0.01, 1],
+				'domain': [0, 1],
 				'dtick': 10,
 				'exponentformat': 'B',
 				'gridcolor': '#eee',
