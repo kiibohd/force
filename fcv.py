@@ -218,6 +218,16 @@ class ForceData:
 					'usable_distance_range' : None,
 					'usable_force_range' : None,
 					'extra_info' : dict(),
+					'rest_point' : { 0 : [] },
+					'actuation_point' : { 0 : [] },
+					'release_range' : { 0 : [] },
+					'bottom_out_point' : { 0 : [] },
+					'reset_point' : { 0 : [] },
+					'repeat_range' : { 0 : [] },
+					'total_force' : { 0 : [] },
+					'actuation_force' : { 0 : [] },
+					'total_force_avg' : None,
+					'actuation_force_avg' : None,
 				} )
 
 		self.cur_switch = num
@@ -421,7 +431,10 @@ class ForceData:
 
 			# Run analysis
 			self.curve_analysis_distance()
-			self.curve_analysis_force()
+			#self.curve_analysis_force() # TODO
+			self.area_under_curve()
+
+		self.analysis_averaging()
 
 	def curve_analysis_distance( self ):
 		'''
@@ -440,8 +453,12 @@ class ForceData:
 		force_adc = self.force_adc_converted()
 
 		# Rest Point
-		# TODO - Algorithm
+		# Find the index of 0 mm, or the first non-negative value
 		rest_point = None
+		for index, elem in enumerate( distance ):
+			if elem >= 0:
+				rest_point = ( index, ( force_adc[ index ], elem ) )
+				break
 
 		# Actuation and Reset Points
 		actuation = self.actuation()
@@ -453,8 +470,15 @@ class ForceData:
 			reset_point = None
 
 		# Bottom-out Point
-		# TODO - Algorithm
+		# Use the point where force crosses the max_force
 		bottom_out_point = None
+		plot_data = self.get_var('extra_info')
+		for index, elem in enumerate( force_adc ):
+			if elem >= plot_data['max_force']:
+				# Since we have bottomed-out at this point, use the previous index
+				index -= 1
+				bottom_out_point = ( index, ( elem, distance[ index ] ) )
+				break
 
 		# Store analysis with test
 		self.set('rest_point', rest_point )
@@ -491,6 +515,92 @@ class ForceData:
 		self.set('reset_force', self.get('reset_point') )
 		self.set('bottom_out_force', bottom_out_force )
 		self.set('pre_load_force', pre_load_force )
+
+	def area_under_curve( self ):
+		'''
+		-- Area Under Curve --
+		Uses numpy to integrate the area under the force curve
+
+		Two different calculations
+		1) Full area, 0 to bottom out
+		2) Actuation, 0 to actuation point (if available)
+		'''
+		from numpy import trapz
+
+		distance = self.distance_mm()
+		force_adc = self.force_adc_converted()
+
+		rest_point = self.get('rest_point')
+		bottom_out_point = self.get('bottom_out_point')
+		actuation_point = self.get('actuation_point')
+
+		print( "Rest, Bottom-out:", rest_point, bottom_out_point )
+
+		# Full Area
+		total_force = trapz(
+			force_adc[ rest_point[0]:bottom_out_point[0] ],
+			distance[ rest_point[0]:bottom_out_point[0] ],
+		)
+		print("total force:", total_force, "gfmm")
+
+		# Actuation
+		actuation_force = None
+		if actuation_point is not None:
+			actuation_force = trapz(
+				force_adc[ rest_point[0]:actuation_point[0] ],
+				distance[ rest_point[0]:actuation_point[0] ],
+			)
+			print("actuation force:", actuation_force, "gfmm")
+			if actuation_force <= 1:
+				print("{0} Less than 1 gfmm, ignoring...".format( WARNING ) )
+				actuation_force = None
+
+		self.set('total_force', total_force )
+		self.set('actuation_force', actuation_force )
+
+	def analysis_averaging( self ):
+		'''
+		Takes analysis from the set of tests and averages it
+		'''
+		total_tests = len( self.data[ self.cur_switch ]['total_force'] ) - 1
+
+		# Total Force
+		total = 0
+		for index in self.options['curves']:
+			# Set datastructures for given test
+			self.set_test( index )
+
+			# Get total_force for this test
+			total += self.get('total_force')
+		total_force_avg = total / total_tests
+		print("total force avg:", total_force_avg, "gfmm")
+		self.set_var('total_force_avg', total_force_avg )
+
+		# Acutation Force
+		if 'actuation_force' in self.data[ self.cur_switch ].keys():
+			total = 0
+			for index in self.options['curves']:
+				# Set datastructures for given test
+				self.set_test( index )
+
+				# Get actuation_force for this test
+				value = self.get('actuation_force')
+
+				# Sometimes a single test won't have an actuation...
+				# Bad test, or switch, ignore from average
+				if value is None:
+					total_tests -= 1
+					print("{0} Missing actuation from test #{1}...".format(
+						WARNING,
+						index,
+					) )
+					continue
+				total += value
+			# If 0, then just ignore this measurement
+			if total != 0:
+				actuation_force_avg = total / total_tests
+				print("actuation force avg:", actuation_force_avg, "gfmm")
+				self.set_var('actuation_force_avg', actuation_force_avg )
 
 
 	def max_force_points_converted( self ):
@@ -555,7 +665,7 @@ class ForceData:
 
 	def force_adc_converted( self ):
 		'''
-		Returns a list of force serial values for the current test
+		Returns a list of converted force adc values for the current test
 		'''
 		midpoint = self.mid_point()
 		data = [ data.force_adc / self.get_var('force_adc_serial_factor')[0] for data in self.get('test')[ :midpoint ] ]
@@ -600,21 +710,36 @@ class ForceData:
 		It's been noted that the multiplier should be 100.6 (and that it could vary from scale to scale)
 		'''
 		mm_conv = 0.009921875
+		plot_data = self.get_var('extra_info')
 
 		# Determine the start and max distance points (using data indices)
 		max_force_points = self.max_force_points_converted()
 		zero_point_press = max_force_points[0]
 		zero_point_release = max_force_points[1]
 
+		# XXX Use the release_mm_offset to deal with algorithm issues, defined in mm when necessary
+		plot_data = self.get_var('extra_info')
+		if 'release_mm_offset' in plot_data.keys():
+			release_offset = plot_data['release_mm_offset']
+		else:
+			release_offset = 0
+
+		# Apply mm_shift
+		if 'mm_shift' in plot_data.keys():
+			press_offset = plot_data['mm_shift']
+			release_offset += plot_data['mm_shift']
+		else:
+			press_offset = 0
+
 		# Compute lists with offsets
 		mid_point = self.mid_point()
-		press = [ (data.distance - zero_point_press) * mm_conv for data in self.get('test')[:mid_point] ]
-		release = [ (data.distance - zero_point_release) * mm_conv for data in self.get('test')[mid_point:] ]
+		press = [ ((data.distance - zero_point_press) * mm_conv) + press_offset for data in self.get('test')[:mid_point] ]
+		release = [ ((data.distance - zero_point_release) * mm_conv) + release_offset for data in self.get('test')[mid_point:] ]
 
 		press.extend( release )
 
-		# Flip the distance axis at 4 mm
-		max_mm = 4
+		# Flip the distance axis at max_distance (e.g. 4 mm)
+		max_mm = plot_data['max_distance']
 		press = [ (point - max_mm) * -1 for point in press ]
 
 		# Make sure distance points are sequential
@@ -1529,10 +1654,22 @@ class PlotlyForceData( GenericForceData ):
 			description_box = '{0}</br>'.format( plot_data['info_box_desc'] )
 
 
+		# Analysis Data
+		analysis_data = ""
+		analysis_data += "Total Force: <b>{0} gfmm</b></br>".format(
+			int( round( self.force_data.get_var('total_force_avg') ) )
+		)
+		if self.force_data.get_var('actuation_force_avg') is not None:
+			analysis_data += "Actuation Force: {0} gfmm</br>".format(
+				int( round(self.force_data.get_var('actuation_force_avg') ) )
+			)
+
+
 		# Graph infobox
 		info_box = {
 			'text' :
 				'{0}</br>'
+				'{5}'
 				'{1}'
 				'{2}'
 				'{3}</br>'
@@ -1541,6 +1678,7 @@ class PlotlyForceData( GenericForceData ):
 					description_box,
 					name_line,
 					plot_data['created'], date.today().isoformat(),
+					analysis_data,
 				),
 			'bgcolor': 'rgba(0, 0, 0, 0)',
 			'bordercolor': 'rgba(0, 0, 0, 0)',
@@ -1552,7 +1690,7 @@ class PlotlyForceData( GenericForceData ):
 				'family': 'Open Sans, sans-serif',
 				'size': 12,
 			},
-			'align' : 'left',
+			'align' : 'right',
 			'x': 1,
 			'xanchor': 'right',
 			'y': 0,
@@ -1977,8 +2115,7 @@ if __name__ == '__main__':
 	print ("Curve Analysis")
 	for index in range( force_data.switches ):
 		force_data.set_switch( index )
-		# TODO
-	#	force_data.curve_analysis()
+		force_data.curve_analysis()
 
 	# Process output objects
 	print ("Output Files")
