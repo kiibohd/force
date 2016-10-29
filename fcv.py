@@ -397,6 +397,7 @@ class ForceData:
 			peak_index = plot_data['peak_detection_index']
 		else:
 			peak_index = 0
+		print("Peaks:", peaks)
 
 		first = adc_diff.index( peaks[ peak_index ][1] )
 		last = adc_diff.index( peaks[-1][1] )
@@ -617,15 +618,22 @@ class ForceData:
 		# Using the approximate points, interpolate to find the point we want
 		# dist = dist_1 + (dist_2 - dist_1)( (force - force_1) / (force_2 - force_1) )
 		max_force_calc = self.get_var('usable_force_range')[1]
-		#print( "MAX FORCE: ", max_force_calc )
+		print( "MAX FORCE: ", max_force_calc )
 
 		# Press "wave"
 		conv_factor = self.get_var('force_adc_serial_factor')[0]
-		press_max_force_index = [
-			index
-			for index, value in enumerate( self.get('test') )
-			if value.force_adc / conv_factor > max_force_calc
-		][0]
+		try:
+			press_max_force_index = [
+				index
+				for index, value in enumerate( self.get('test') )
+				if value.force_adc / conv_factor > max_force_calc
+			][0]
+		except IndexError as err:
+			print( "{0} Check data, likely a Next Test Starting tag is missing/in the wrong spot.".format(
+				WARNING
+			) )
+			print( err )
+
 		point1 = self.get('test')[ press_max_force_index - 1 ]
 		point2 = self.get('test')[ press_max_force_index ]
 		press_max = point1.distance + ( point2.distance - point1.distance ) * (
