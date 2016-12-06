@@ -324,36 +324,39 @@ class ForceData:
 
 			press_analysis.append( point )
 
-		press_force_adc_serial_factor = statistics.median_grouped(
-			[ elem.force_adc_serial_factor for elem in press_analysis ]
-		)
-
-		# Release calibration
-		release_difference = self.cal_adc_release_center - self.cal_serial_release_center
-		release_analysis = []
-		#for index in range(
-		for index in range( midpoint - abs( release_difference ), len( self.get('test') ) - abs( release_difference ) ):
-			data_adc = self.get('test')[ index ]
-			data_serial = self.get('test')[ index + release_difference ]
-
-			# Compute factor
-			try:
-				force_factor = data_adc.force_adc / data_serial.force_serial
-			# Just ignore zero values, they skew results of the average anyways
-			except ZeroDivisionError:
-				continue
-
-			point = AnalysisDataPoint(
-				force_factor
+		# XXX Currently unused
+		if False:
+			press_force_adc_serial_factor = statistics.median_grouped(
+				[ elem.force_adc_serial_factor for elem in press_analysis ]
 			)
 
-			release_analysis.append( point )
+			# Release calibration
+			release_difference = self.cal_adc_release_center - self.cal_serial_release_center
+			release_analysis = []
+			for index in range( midpoint - abs( release_difference ), len( self.get('test') ) - abs( release_difference ) ):
+				data_adc = self.get('test')[ index ]
+				print( index, release_difference, len( self.get('test') ) )
+				print( midpoint )
+				data_serial = self.get('test')[ index + release_difference ]
 
-		release_force_adc_serial_factor = statistics.median_grouped(
-				[ elem.force_adc_serial_factor for elem in release_analysis ]
-		)
+				# Compute factor
+				try:
+					force_factor = data_adc.force_adc / data_serial.force_serial
+				# Just ignore zero values, they skew results of the average anyways
+				except ZeroDivisionError:
+					continue
 
-		print( press_force_adc_serial_factor, release_force_adc_serial_factor )
+				point = AnalysisDataPoint(
+					force_factor
+				)
+
+				release_analysis.append( point )
+
+			release_force_adc_serial_factor = statistics.median_grouped(
+					[ elem.force_adc_serial_factor for elem in release_analysis ]
+			)
+
+			print( press_force_adc_serial_factor, release_force_adc_serial_factor )
 
 
 
@@ -381,8 +384,8 @@ class ForceData:
 		# XXX
 		# TODO
 		# Remove hard-coding of factor
-		print( self.get_var('force_adc_serial_factor') )
-		self.set_var('force_adc_serial_factor', ( press_force_adc_serial_factor, release_force_adc_serial_factor ) )
+		#print( self.get_var('force_adc_serial_factor') )
+		#self.set_var('force_adc_serial_factor', ( press_force_adc_serial_factor, release_force_adc_serial_factor ) )
 		press_force_adc_serial_factor = 37.98400556328233
 		self.set_var('force_adc_serial_factor', ( press_force_adc_serial_factor, press_force_adc_serial_factor - 1.35 ) )
 
@@ -406,6 +409,10 @@ class ForceData:
 		force_data = self.force_adc_converted()[ first:last ]
 		max_force_calc = statistics.median_grouped( force_data ) * 2
 		self.set_var('usable_force_range', ( ( 0, max_force_calc ) ) )
+
+		# XXX Override usable force range, needed if statistics from calibration are not usable
+		if 'max_cal_force_override' in plot_data.keys():
+			self.set_var('usable_force_range', ( ( 0, plot_data['max_cal_force_override'] ) ) )
 
 		# Start from beginning of press + 1/4 mm
 		# TODO peak detection algorith has issues with exponential force curves -Jacob
@@ -472,8 +479,10 @@ class ForceData:
 
 		# Bottom-out Point
 		# Use the point where force crosses the max_force
-		bottom_out_point = None
+		# Default to max force point
 		plot_data = self.get_var('extra_info')
+		default_index = self.get_var('press_max_force_index')
+		bottom_out_point = ( default_index, ( force_adc[ default_index ], distance[ default_index ] ) )
 		for index, elem in enumerate( force_adc ):
 			if elem >= plot_data['max_force']:
 				# Since we have bottomed-out at this point, use the previous index
@@ -628,11 +637,19 @@ class ForceData:
 				for index, value in enumerate( self.get('test') )
 				if value.force_adc / conv_factor > max_force_calc
 			][0]
+			self.set_var('press_max_force_index', press_max_force_index )
 		except IndexError as err:
 			print( "{0} Check data, likely a Next Test Starting tag is missing/in the wrong spot.".format(
 				WARNING
 			) )
 			print( err )
+			# Max Detected force
+			press_max_force_detected = [
+				value.force_adc / conv_factor
+				for index, value in enumerate( self.get('test') )
+				if value.force_adc / conv_factor
+			]
+			print( "Max Detected Force:", max(press_max_force_detected ) )
 
 		point1 = self.get('test')[ press_max_force_index - 1 ]
 		point2 = self.get('test')[ press_max_force_index ]
@@ -828,6 +845,7 @@ class ForceData:
 		'''
 		Determines the direction change point of a test sequence
 		'''
+		print( min( self.get('test'), key = lambda t: t.distance ) )
 		return self.get('test').index( min( self.get('test'), key = lambda t: t.distance ) )
 
 	def mid_point_dir( self ):
@@ -1361,6 +1379,9 @@ class PlotlyForceData( GenericForceData ):
 			visible = 'true'
 			if index in self.force_data.options['curves_hidden']:
 				visible = 'legendonly'
+			# Show if overridden
+			if 'curves_show' in plot_data.keys() and index in plot_data['curves_show']:
+				visible = 'true'
 
 			# Only show if not disabled
 			if self.force_data.options['press_disable'] is False:
@@ -1628,12 +1649,15 @@ class PlotlyForceData( GenericForceData ):
 		distance_bounds = 0
 		distance_range = self.force_data.get_var('usable_distance_range')
 		force_range = self.force_data.get_var('usable_force_range')
+		distance_tick = 10
 		if 'distance_bounds' in plot_data.keys():
 			distance_bounds = plot_data['distance_bounds']
 		if 'max_distance' in plot_data.keys():
 			distance_range = ( 0 - distance_bounds, plot_data['max_distance'] + distance_bounds )
 		if 'max_force' in plot_data.keys():
 			force_range = ( 0, plot_data['max_force'] )
+		if 'distance_tick' in plot_data.keys():
+			distance_tick = plot_data['distance_tick']
 
 		# If more than one switch, use a different title
 		title = "{0} {1}".format( plot_data['vendor'], plot_data['popular_name'] )
@@ -1820,7 +1844,7 @@ class PlotlyForceData( GenericForceData ):
 				'anchor': 'x',
 				'autorange': False,
 				'domain': [0, 1],
-				'dtick': 10,
+				'dtick': distance_tick,
 				'exponentformat': 'B',
 				'gridcolor': '#eee',
 				'gridwidth': 2,
