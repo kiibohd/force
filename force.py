@@ -326,7 +326,8 @@ def reinit_read():
 			data_unp_map = decode_data( rawhid.usb_read() )
 
 			# Check if useful
-			if data_unp_map == "Starting Test/Calibration":
+			if data_unp_map == "Starting Test/Calibration" or ( not write_file and data_unp_map.__class__.__name__ == "ForceCurveCalibrationPoint" ):
+				print("|WRITE START|")
 				# Write file to disk
 				# TODO Add option to enable/disable compression
 				#outfile = open( forcecurve_filename, 'w' )
@@ -353,6 +354,11 @@ def reinit_read():
 		if write_file:
 			json_write()
 
+	except RuntimeError:
+		# If we cancel in the middle of a test, still write out the json
+		if write_file:
+			json_write()
+
 	except usb.core.USBError:
 		# Cleanup first
 		rawhid.clean()
@@ -365,6 +371,7 @@ def reinit_read():
 
 	# Cleanup
 	rawhid.clean()
+	print("|DONE|")
 	sys.exit( 0 )
 
 

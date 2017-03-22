@@ -3,7 +3,7 @@
 fcv format conversion and analysis script
 '''
 
-# Copyright (C) 2016 by Jacob Alexander
+# Copyright (C) 2016-2017 by Jacob Alexander
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -1645,6 +1645,18 @@ class PlotlyForceData( GenericForceData ):
 		# Retrieve misc info about force curve(s)
 		plot_data = self.force_data.get_var('extra_info')
 
+		# Setup metadata for grid (only used on uploads)
+		updated_date = date.today().isoformat()
+		self.metadata = {
+			'Created'      : plot_data['created'],
+			'Updated'      : updated_date,
+			'Author'       : plot_data['author'],
+			'Nick'         : plot_data['nick'],
+			'Description'  : plot_data['description'],
+			'URL'          : plot_data['url'],
+			'Info Box'     : plot_data['info_box_desc'],
+		}
+
 		# Check if override has been set for scale ranges
 		distance_bounds = 0
 		distance_range = self.force_data.get_var('usable_distance_range')
@@ -1663,6 +1675,11 @@ class PlotlyForceData( GenericForceData ):
 		title = "{0} {1}".format( plot_data['vendor'], plot_data['popular_name'] )
 		if self.force_data.switches > 1:
 			title = "Switch Comparison"
+		else:
+			# Only set the vendor and part number if a single switch
+			self.metadata['Vendor'] = plot_data['vendor']
+			self.metadata['Popular Name'] = plot_data['popular_name']
+			self.metadata['Part Number'] = plot_data['part']
 
 		# List switches in description
 		test_names = []
@@ -1687,14 +1704,18 @@ class PlotlyForceData( GenericForceData ):
 
 
 		# Analysis Data
+		total_force_avg = int( round( self.force_data.get_var('total_force_avg') ) )
 		analysis_data = ""
 		analysis_data += "Total Force: <b>{0} gfmm</b></br>".format(
-			int( round( self.force_data.get_var('total_force_avg') ) )
+			total_force_avg
 		)
+		self.metadata['Total Force Average'] = "{0} gfmm".format( total_force_avg )
 		if self.force_data.get_var('actuation_force_avg') is not None:
+			actuation_force_avg = int( round(self.force_data.get_var('actuation_force_avg') ) )
 			analysis_data += "Actuation Force: {0} gfmm</br>".format(
-				int( round(self.force_data.get_var('actuation_force_avg') ) )
+				actuation_force_avg
 			)
+			self.metadata['Acutuation Force Average'] = "{0} gfmm".format( actuation_force_avg )
 
 
 		# Graph infobox
@@ -1709,7 +1730,7 @@ class PlotlyForceData( GenericForceData ):
 					description_names,
 					description_box,
 					name_line,
-					plot_data['created'], date.today().isoformat(),
+					plot_data['created'], updated_date,
 					analysis_data,
 				),
 			'bgcolor': 'rgba(0, 0, 0, 0)',
@@ -1756,6 +1777,7 @@ class PlotlyForceData( GenericForceData ):
 			# Set the switch index
 			self.force_data.set_switch( switch )
 			#self.process_annotations( graphs, annotations )
+
 
 		# Layout/Theme Settings
 		layout_settings = {
@@ -1915,10 +1937,50 @@ class PlotlyForceData( GenericForceData ):
 
 		# Plot
 		print( filename )
-		py.plot( force_curve, filename=filename )
+		url = py.plot( force_curve, filename=filename )
 
+		# Add meta-data
+		# XXX This looks way more complicated than it should be...
+		#     Unfortunately Plotly thinks we should upload the grid first, and references that.
+		#     But that's dumb, so we upload the plot+data first, figure out the grid, then upload the metadata to that.
+		#     1) Upload plot (py.plot)
+		#     2) Generate an API file sources to determine grid file id
+		#     3) Query REST API with login details
+		#     4) Find all associated grids with plot
+		#     5) Build actual URLs for each grid
+		#     6) Upload metadata to each grid
+		if self.force_data.options['upload']:
+			import json
+			file_id = int( url.split('/')[4] ) # e.g. https://plot.ly/~haata/324/kaihua-bronze/
+			new_url = "https://api.plot.ly/v2/files/{0}:{1}/sources".format(
+				self.force_data.options['plotly_user'],
+				file_id
+			)
+			print( "Sources:", new_url )
+			json_data = json.loads( self.read_url( new_url ).text )
 
+			# Find grid(s)
+			for node in json_data['graph']['nodes']:
+				if node['type'] == 'grid':
+					file_id = node['metadata']['fid'].split(':')
+					grid_url = "https://plot.ly/~{0}/{1}/".format( *file_id )
 
+					print( "Grid Url:", grid_url )
+					py.meta_ops.upload( self.metadata, grid_url=grid_url )
+
+	def read_url( self, url ):
+		import requests
+		from requests.auth import HTTPBasicAuth
+		r = requests.get(
+			url,
+			auth=HTTPBasicAuth( self.force_data.options['plotly_user'], self.force_data.options['plotly_api_key'] ),
+			headers={ 'Plotly-Client-Platform' : 'python' },
+		)
+		if r.status_code != 200:
+			print( "{0} Could not retrieve Plotly folders: {1}".format( ERROR, r ) )
+			print( url )
+			sys.exit( 1 )
+		return r
 
 
 
@@ -2017,7 +2079,6 @@ def processCommandLineArgs( force_data ):
 		import json
 		with open( args.config ) as fp:
 			options = json.load( fp )
-		pass
 	else:
 		print( "{0} '{1}' doesn't exist, config file will not be used.".format( WARNING, args.config ) )
 
