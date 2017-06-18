@@ -35,7 +35,7 @@ For example:
 
 ### Ploty
 
-To generate a Plotly API key, create your own account (Plotly)[https://plot.ly/feed].
+To generate a Plotly API key, create your own account [Plotly](https://plot.ly/feed).
 Then on the top-right of the Plotly page (your username), click on **Settings**.
 On the left click on **API Keys** and click on **Regenerate Keys**.
 
@@ -45,7 +45,7 @@ Use that key as the `plotly_api_key`. The `plotly_user` should be your username.
 
 ### Google Doc
 
-See the gspread (documentation)[http://gspread.readthedocs.io/en/latest/oauth2.html] on generating the `gdoc_oauth_json` file.
+See the gspread [documentation](http://gspread.readthedocs.io/en/latest/oauth2.html) on generating the `gdoc_oauth_json` file.
 The `gdoc_url` is just the URL to the google spreadsheet you're trying to synchronize with.
 
 
@@ -54,5 +54,10 @@ The `gdoc_url` is just the URL to the google spreadsheet you're trying to synchr
 ```bash
 ./plotly_gdoc_sync.py --help
 
+./plotly_gdoc_sync.py --config <my config> --list-plotly-switches
+./plotly_gdoc_sync.py --list-plotly-missing-metadata
+./plotly_gdoc_sync.py --list-plotly-metadata-detailed
+./plotly_gdoc_sync.py --list-gdoc-switches
+./plotly_gdoc_sync.py --sync-plotly-to-gdoc
 ```
 
