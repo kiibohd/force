@@ -1937,7 +1937,7 @@ class PlotlyForceData( GenericForceData ):
 
 		# Plot
 		print( filename )
-		url = py.plot( force_curve, filename=filename )
+		url = py.plot( force_curve, filename=filename, fileopt="overwrite" )
 
 		# Add meta-data
 		# XXX This looks way more complicated than it should be...
