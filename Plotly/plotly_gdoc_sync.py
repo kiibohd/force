@@ -57,9 +57,17 @@ parser.add_argument("--list-plotly-metadata",
 	action="store_true",
 	help="List switches in plotly with metadata",
 )
+parser.add_argument("--list-plotly-metadata-detailed",
+	action="store_true",
+	help="List switches in plotly with metadata, including the metadata",
+)
 parser.add_argument("--list-gdoc-switches",
 	action="store_true",
 	help="List switches stored in gdoc",
+)
+parser.add_argument("--list-gdoc-switches-no-id",
+	action="store_true",
+	help="List switches stored in gdoc without Plotly unique identifiers",
 )
 parser.add_argument("--sync-plotly-to-gdoc",
 	action="store_true",
@@ -277,12 +285,12 @@ p_data = PlotlyData()
 g_data = GDocData()
 
 
-# List plotly switches if requested
+# List plotly switches
 if args.list_plotly_switches:
 	p_data.get_switches( verbose=True )
 	sys.exit(0)
 
-# List gdoc switches if requested
+# List gdoc switches
 if args.list_gdoc_switches:
 	g_data.get_switches( verbose=True )
 	sys.exit(0)
@@ -297,8 +305,27 @@ if args.list_plotly_metadata:
 	p_data.check_all_switch_metadata( True )
 	sys.exit(0)
 
+# List plotly switches with detailed metadata, i.e. show all metadata for each switch
+if args.list_plotly_metadata_detailed:
+	# TODO
+	# - List all switches (like list_plotly_metadata), but also show the metadata dictionary information
+	sys.exit(0)
+
+# List gdoc switches without a plotly unique identifier
+if args.list_gdoc_switches_no_id:
+	# TODO
+	# - List gdoc switches without a plotly unique identifier
+	sys.exit(0)
+
 # Synchronize Plotly to Google Doc
 if args.sync_plotly_to_gdoc:
 	# TODO
-	pass
+	# Query each plotly switch
+	# - Use Plotly Link as unique identifier (i.e. https://plot.ly/~haata/268)
+	# - If no matching Plotly Link, use the Popular Name + Part Number fields to identify
+	#   If more than one switch matches the Popular Name + Part Number, do not update, and display a warning
+	# - If no
+	# If any field (metadata) is not present or empty (""), do not update in gdoc
+	# When in doubt, warn and do not update
+	sys.exit(0)
 
