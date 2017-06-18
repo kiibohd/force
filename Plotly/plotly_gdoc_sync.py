@@ -102,7 +102,8 @@ class PlotlyData:
 		data = []
 
 		# Get initial page
-		r = self.read_url( url.format( 1 ) )
+		user = options['plotly_query_user']
+		r = self.read_url( url.format( user, 1 ) )
 		data.append( json.loads( r.text )['children'] )
 
 		# Determine total pages to read
@@ -113,7 +114,7 @@ class PlotlyData:
 			# There may not be any next/last pages
 			return data
 
-		urls = [ url.format( num ) for num in range( next_page, last_page + 1 ) ]
+		urls = [ url.format( user, num ) for num in range( next_page, last_page + 1 ) ]
 
 		# Concurrently read generated list of urls
 		with concurrent.futures.ThreadPoolExecutor( max_workers=10 ) as executor:
@@ -130,7 +131,7 @@ class PlotlyData:
 
 	def get_all_folders( self ):
 		# Get all page data
-		data = self.get_all_pages('https://api.plot.ly/v2/folders/home?page={}&world_readable=true')
+		data = self.get_all_pages('https://api.plot.ly/v2/folders/home?user={}&page={}&world_readable=true')
 
 		# Parse over results and filter out folders
 		folders = {}
@@ -143,7 +144,7 @@ class PlotlyData:
 
 	def get_plots_in_folders( self, url, folder ):
 		# Get all page data
-		data = self.get_all_pages( "{0}?page={{}}".format( url ) )
+		data = self.get_all_pages( "{0}?user={{}}&page={{}}".format( url ) )
 
 		# Gather results, only grid and plots
 		results = []

@@ -23,7 +23,8 @@ For example:
 
 ```json
 {
-        "plotly_user" : "haata",
+        "plotly_query_user" : "haata",
+        "plotly_user" : "<plotly username>",
         "plotly_api_key" : "<plotly api key>",
         "gdoc_oauth_json" : "<local google doc oauth json>",
         "gdoc_url" : "https://docs.google.com/spreadsheets/d/<myhash>/edit?usp=sharing",
@@ -38,7 +39,8 @@ To generate a Plotly API key, create your own account (Plotly)[https://plot.ly/f
 Then on the top-right of the Plotly page (your username), click on **Settings**.
 On the left click on **API Keys** and click on **Regenerate Keys**.
 
-Use that key as the `plotly_api_key`. The `plotly_user` should be the user you're trying to query, which may/or may not be your user.
+Use that key as the `plotly_api_key`. The `plotly_user` should be your username.
+`plotly_query_user` should be the user you're trying to query.
 
 
 ### Google Doc
