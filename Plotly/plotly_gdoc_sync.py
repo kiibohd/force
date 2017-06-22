@@ -205,16 +205,18 @@ class PlotlyData:
 
 		return switches, folders
 
-	def check_switch_metadata( self, switch, has ):
+	def check_switch_metadata( self, switch, has, show ):
 		new_url = switch['api_urls']['grids']
 		json_data = json.loads( self.read_url( new_url ).text )
 		#print( json.dumps( json_data, sort_keys=True, indent=4 ) )
 		metadata_len = len( json_data['metadata'].keys() )
 		if has and metadata_len > 0 or not has and metadata_len == 0:
-			print( "{0} - {1}".format( json_data['filename'], json_data['fid'] ) )
+			if show:
+				print( "{0} - {1}".format( json_data['filename'], json_data['fid'] ) )
+		return ( new_url, json_data['metadata'], json_data['web_url'] )
 
 
-	def check_all_switch_metadata( self, has=False ):
+	def check_all_switch_metadata( self, has=False, show=False, detailed_show=False ):
 		switches, folders = p_data.get_switches()
 		switch_list = []
 
@@ -225,17 +227,27 @@ class PlotlyData:
 				if elem['filetype'] == 'grid':
 					switch_list.append( elem )
 
+		metadata_list = []
+
 		# Parallelize API calls to retrieve list of switches
 		with concurrent.futures.ThreadPoolExecutor( max_workers=100 ) as executor:
-			future_to_url = { executor.submit( self.check_switch_metadata, switch, has ) : switch for switch in switch_list }
+			future_to_url = { executor.submit( self.check_switch_metadata, switch, has, show ) : switch for switch in switch_list }
 			for future in concurrent.futures.as_completed( future_to_url ):
 				url = future_to_url[ future ]
 				try:
-					result = future.result()
 					# Returns a tuple, use the url as the dictionary key
-					# TODO
+					result = future.result()
+					if detailed_show and len( result[1].keys() ) > 0:
+						print( result[2], result[0] )
+						print( json.dumps( result[1], sort_keys=True, indent=4 ) )
+
+					# Append tuple to returning list
+					if len( result[1].keys() ) > 0:
+						metadata_list.append( result )
 				except Exception as exc:
 					print( "{0} generated an exception: {1}".format( ERROR, exc ) )
+
+		return metadata_list
 
 
 class GDocData:
@@ -297,18 +309,18 @@ if args.list_gdoc_switches:
 
 # List plotly switches missing metadata
 if args.list_plotly_missing_metadata:
-	p_data.check_all_switch_metadata( False )
+	p_data.check_all_switch_metadata( False, True )
 	sys.exit(0)
 
 # List plotly switches with metadata
 if args.list_plotly_metadata:
-	p_data.check_all_switch_metadata( True )
+	p_data.check_all_switch_metadata( True, True )
 	sys.exit(0)
 
 # List plotly switches with detailed metadata, i.e. show all metadata for each switch
 if args.list_plotly_metadata_detailed:
-	# TODO
 	# - List all switches (like list_plotly_metadata), but also show the metadata dictionary information
+	p_data.check_all_switch_metadata( True, True, True )
 	sys.exit(0)
 
 # List gdoc switches without a plotly unique identifier
