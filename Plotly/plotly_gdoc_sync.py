@@ -213,7 +213,21 @@ class PlotlyData:
 		if has and metadata_len > 0 or not has and metadata_len == 0:
 			if show:
 				print( "{0} - {1}".format( json_data['filename'], json_data['fid'] ) )
-		return ( new_url, json_data['metadata'], json_data['web_url'] )
+
+		# Determine the reference plot to the grid data
+		source_url = "{0}/sources".format( json_data['api_urls']['files'] )
+		json_data2 = json.loads( self.read_url( source_url ).text )
+
+		# Filter for only plots
+		plots = [ node for node in json_data2['graph']['nodes'] if node['type'] == "plot" ]
+
+		# Add new field, which contains the Plotly web link
+		for plot in plots:
+			name_tuple = tuple( plot['metadata']['fid'].split(':') )
+			plot['url'] = "https://plot.ly/~{0}/{1}/".format( *name_tuple )
+
+		#print( json.dumps( plots, sort_keys=True, indent=4 ) )
+		return ( new_url, json_data['metadata'], plots )
 
 
 	def check_all_switch_metadata( self, has=False, show=False, detailed_show=False ):
@@ -268,16 +282,17 @@ class GDocData:
 		switches = {}
 
 		# Iterate over each switch entry
-		for switch in self.worksheet.get_all_records():
+		for index, switch in enumerate( self.worksheet.get_all_records() ):
 			name = switch['Popular Name']
+			row = index + 2
 			if switch['Part Number'] != "":
 				name = "{0} {1}".format( name, switch['Part Number'] )
 
 			# Insert switch into dictionary
 			if switch['Brand'] not in switches.keys():
-				switches[ switch['Brand'] ] = [ ( name, switch ) ]
+				switches[ switch['Brand'] ] = [ ( name, row, switch ) ]
 			else:
-				switches[ switch['Brand'] ].append( ( name, switch ) )
+				switches[ switch['Brand'] ].append( ( name, row, switch ) )
 
 		# Sort by brand
 		for brand, elem in sorted( switches.items(), key=lambda items: items[0] ):
@@ -285,9 +300,94 @@ class GDocData:
 				print( "{0} Switches".format( brand ) )
 			for switch in sorted( elem, key=lambda items: items[0] ):
 				if verbose:
-					print( "\t{0} {1}".format( brand, switch[0] ) )
+					print( "\t{0} {1} - {2}".format( brand, switch[0], switch[1] ) )
 
 		return switches
+
+	def get_switches_id( self, has_id=True, verbose=False ):
+		# Get list of switches
+		switches = self.get_switches()
+
+		# Filter out switches with/without an Id
+		for brand, elem in switches.copy().items():
+			for index, switch in enumerate( elem ):
+				if not has_id and switch[2]['Plotly Link'] != "":
+					del elem[ index ]
+				elif has_id and switch[2]['Plotly Link'] == "":
+					del elem[ index ]
+
+			# Clean out brands that are empty
+			if len( switches[ brand ] ) == 0:
+				del switches[ brand ]
+
+		# Sort by brand
+		for brand, elem in sorted( switches.items(), key=lambda items: items[0] ):
+			if verbose:
+				print( "{0} Switches".format( brand ) )
+			for switch in sorted( elem, key=lambda items: items[0] ):
+				if verbose:
+					print( "\t{0} {1} - {2}".format( brand, switch[0], switch[1] ) )
+
+		#print( json.dumps( switches, sort_keys=True, indent=4 ) )
+		return switches
+
+	def get_cell( self, column_name, row_index ):
+		# Get list of switches
+		switches = self.get_switches()
+
+		columns = self.worksheet.row_values(1)
+		col_index = -1
+		# Find column index
+		for index, col in enumerate( columns ):
+			if column_name == col:
+				col_index = index + 1
+
+		# Not found
+		if col_index == -1:
+			return None
+
+		# Determine cell name
+		cell_name = gspread.utils.rowcol_to_a1( row_index, col_index )
+
+		# Get cell using row and column indices
+		cell = self.worksheet.cell( row_index, col_index )
+
+		# Return tuple of (cell_name, cell)
+		return (cell_name, cell)
+
+	def update_switch( self, gdoc_row_index, plotly_metadata, plotly_url ):
+		# TODO
+		print( gdoc_row_index )
+		print( plotly_metadata )
+
+		# Measured
+		self.get_cell( 'Measured', gdoc_row_index ).value = 1
+
+		# Actuation
+		self.get_cell( 'Actuation Force', gdoc_row_index )
+		self.get_cell( 'Actuation Energy', gdoc_row_index )
+		# TODO - Update metadata
+
+		# Bottom-out
+		self.get_cell( 'Bottom-out Force', gdoc_row_index )
+		self.get_cell( 'Bottom-out Energy', gdoc_row_index )
+		# TODO - Update metadata
+
+		# Plotly Link
+		self.get_cell( 'Plotly Link', gdoc_row_index ).value = plotly_url
+
+		# Measured Date
+		if plotly_metadata['Created'] != "":
+			self.get_cell( 'Measured Date', gdoc_row_index ).value = plotly_metadata['Created']
+
+		# Updated Date
+		if plotly_metadata['Updated'] != "":
+			self.get_cell( 'Updated Date', gdoc_row_index ).value = plotly_metadata['Updated']
+
+		print( self.get_cell( 'Popular Name', gdoc_row_index ) )
+		print( self.get_cell( 'Popular Name', 1 ).value )
+		print( self.get_cell( 'Popular Name', 1 ).input_value )
+
 
 
 ### Main ###
@@ -325,19 +425,49 @@ if args.list_plotly_metadata_detailed:
 
 # List gdoc switches without a plotly unique identifier
 if args.list_gdoc_switches_no_id:
-	# TODO
 	# - List gdoc switches without a plotly unique identifier
+	g_data.get_switches_id( False, True )
 	sys.exit(0)
 
 # Synchronize Plotly to Google Doc
 if args.sync_plotly_to_gdoc:
-	# TODO
 	# Query each plotly switch
 	# - Use Plotly Link as unique identifier (i.e. https://plot.ly/~haata/268)
 	# - If no matching Plotly Link, use the Popular Name + Part Number fields to identify
 	#   If more than one switch matches the Popular Name + Part Number, do not update, and display a warning
-	# - If no
 	# If any field (metadata) is not present or empty (""), do not update in gdoc
 	# When in doubt, warn and do not update
+
+	# Get gdoc switches with an id
+	g_switches = g_data.get_switches()
+
+	# Get Plotly switch data
+	p_switches = p_data.check_all_switch_metadata( True )
+
+	# Match gdoc switch with an id
+	for brand, switches in g_switches.items():
+		# For switch in brand
+		for switch in switches:
+			# (1) - Plotly Link Match
+			# TODO (HaaTa): Only handles first plot reference
+			match = [ sw for sw in p_switches if sw[2][0]['url'] == switch[2]['Plotly Link'] ]
+
+			# XXX (HaaTa): There should be only one match for plotly ids
+			if len( match ) == 1:
+				g_data.update_switch( switch[1], match[0][1], sw[2][0]['url'] )
+				continue
+
+			# (2) - Popular Name + Part Number match
+			match = [ sw for sw in p_switches
+				if sw[1]['Popular Name'] == switch[2]['Popular Name']
+					and sw[1]['Part Number'] == switch[2]['Part Number']
+			]
+			# XXX (HaaTa): If there isn't only one match, do not update
+			if len( match ) == 1:
+				g_data.update_switch( switch[1], match[0][1], sw[2][0]['url'] )
+				continue
+
+			# (3) - Warn, do not update
+			print( "{0} Could isolate Plotly reference for: {1} - {2}".format( WARNING, switch[0], switch[1] ) )
 	sys.exit(0)
 
