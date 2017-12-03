@@ -999,6 +999,9 @@ class RawForceData( GenericForceData ):
 		if self.extension == '.gz':
 			in_file = split[0]
 
+		# Just in case we're missing the start
+		self.cur_test = 0
+
 		# Read in companion json file if it exists
 		json_info = "{0}.json".format( os.path.splitext( in_file )[0] )
 		if not os.path.exists( json_info ):
@@ -1276,7 +1279,8 @@ class PlotlyForceData( GenericForceData ):
 		'''
 		Generates the calibration graphs
 		'''
-		from plotly.graph_objs import Scatter
+		from plotly.graph_objs import Scatter as Scatter
+		#from plotly.graph_objs import Scattergl as Scatter
 
 		# Retrieve misc info about force curve(s)
 		plot_data = self.force_data.get_var('extra_info')
@@ -1342,7 +1346,8 @@ class PlotlyForceData( GenericForceData ):
 		'''
 		Generates the non-calibration graphs
 		'''
-		from plotly.graph_objs import Scatter
+		from plotly.graph_objs import Scatter as Scatter
+		#from plotly.graph_objs import Scattergl as Scatter
 
 		# Retrieve misc info about force curve(s)
 		plot_data = self.force_data.get_var('extra_info')
@@ -1721,7 +1726,7 @@ class PlotlyForceData( GenericForceData ):
 		# Graph infobox
 		info_box = {
 			'text' :
-				'{0}</br>'
+				'{0}</br></br>'
 				'{5}'
 				'{1}'
 				'{2}'
@@ -1800,8 +1805,8 @@ class PlotlyForceData( GenericForceData ):
 					'size': 12
 				},
 				'traceorder': 'normal',
-				'x': 0.0,
-				'xanchor': 'center',
+				'x': 0,
+				'xanchor': 'left',
 				'y': 1,
 				'orientation': 'h',
 				'yanchor': 'top'
@@ -1937,7 +1942,10 @@ class PlotlyForceData( GenericForceData ):
 
 		# Plot
 		print( filename )
-		url = py.plot( force_curve, filename=filename, fileopt="overwrite" )
+		if self.force_data.options['upload']:
+			url = py.plot( force_curve, filename=filename, fileopt="overwrite" )
+		else:
+			url = py.plot( force_curve, filename=filename )
 
 		# Add meta-data
 		# XXX This looks way more complicated than it should be...
