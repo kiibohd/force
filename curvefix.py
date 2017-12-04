@@ -139,7 +139,8 @@ def next_test_starting_fix( input_file ):
 	'''
 	import gzip
 	rawfile = gzip.open( input_file, 'rt' )
-	outfile = gzip.open( "{0}.new.gz".format( input_file ), 'wt' )
+	outfile_path = "{0}.new.gz".format( input_file )
+	outfile = gzip.open( outfile_path, 'wt' )
 
 	# Event tags
 	events = {
@@ -209,6 +210,10 @@ def next_test_starting_fix( input_file ):
 
 	rawfile.close()
 	outfile.close()
+
+	# Move files
+	os.rename( input_file, "{0}.old.gz".format( input_file ) )
+	os.rename( outfile_path, input_file )
 
 	# Stats
 	print("-- Next Test Fix Stats --")

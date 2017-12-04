@@ -586,7 +586,7 @@ class ForceData:
 		print("total force avg:", total_force_avg, "gfmm")
 		self.set_var('total_force_avg', total_force_avg )
 
-		# Acutation Force
+		# Actuation Force
 		if 'actuation_force' in self.data[ self.cur_switch ].keys():
 			total = 0
 			for index in self.options['curves']:
@@ -1709,18 +1709,65 @@ class PlotlyForceData( GenericForceData ):
 
 
 		# Analysis Data
+		#  Only using first curve
+		rest_point = self.force_data.get_var('rest_point')
+		bottom_out_point = self.force_data.get_var('bottom_out_point')
+
+		# Attempt curve 1, then 2
+		try:
+			rest_position = rest_point[1][1][1]
+			bottom_out_position = bottom_out_point[1][1][1]
+
+			rest_force = int( round( rest_point[1][1][0] ) )
+			bottom_out_force = int( round( bottom_out_point[1][1][0] ) )
+		except:
+			rest_position = rest_point[2][1][1]
+			bottom_out_position = bottom_out_point[2][1][1]
+
+			rest_force = int( round( rest_point[2][1][0] ) )
+			bottom_out_force = int( round( bottom_out_point[2][1][0] ) )
+
 		total_force_avg = int( round( self.force_data.get_var('total_force_avg') ) )
 		analysis_data = ""
-		analysis_data += "Total Force: <b>{0} gfmm</b></br>".format(
+		analysis_data += "Total Energy: <b>{0} gfmm</b></br>".format(
 			total_force_avg
 		)
-		self.metadata['Total Force Average'] = "{0} gfmm".format( total_force_avg )
+		# XXX (HaaTa) This is not true bottom out force yet...
+		#analysis_data += "Max Force: {0} gf</br>".format( bottom_out_force )
+
+		self.metadata['Rest Position'] = rest_position
+		self.metadata['Bottom-out Position'] = bottom_out_position
+
+		self.metadata['Rest Force'] = rest_force
+		self.metadata['Bottom-out Force'] = bottom_out_force
+
+		self.metadata['Total Energy'] = total_force_avg
 		if self.force_data.get_var('actuation_force_avg') is not None:
 			actuation_force_avg = int( round(self.force_data.get_var('actuation_force_avg') ) )
-			analysis_data += "Actuation Force: {0} gfmm</br>".format(
+			analysis_data += "Actuation Energy: <b>{0} gfmm</b></br>".format(
 				actuation_force_avg
 			)
-			self.metadata['Acutuation Force Average'] = "{0} gfmm".format( actuation_force_avg )
+
+			# Get actuation data
+			actuation_point = self.force_data.get_var('actuation_point')
+			actuation_position = actuation_point[1][1][1]
+			actuation_force = int( round( actuation_point[1][1][0] ) )
+			reset_point = self.force_data.get_var('reset_point')
+			reset_position = reset_point[1][1][1]
+			reset_force = int( round( reset_point[1][1][0] ) )
+
+			analysis_data += "Actuation Force: {0} gf</br>".format( actuation_force )
+			self.metadata['Actuation Energy'] = actuation_force_avg
+			self.metadata['Actuation Position'] = actuation_position
+			self.metadata['Actuation Force'] = actuation_force
+			self.metadata['Reset Position'] = reset_position
+			self.metadata['Reset Force'] = reset_force
+		else:
+			self.metadata['Actuation Energy'] = ""
+			self.metadata['Actuation Position'] = ""
+			self.metadata['Actuation Force'] = ""
+			self.metadata['Reset Position'] = ""
+			self.metadata['Reset Force'] = ""
 
 
 		# Graph infobox

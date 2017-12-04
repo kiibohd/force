@@ -5,6 +5,7 @@
 
 import argparse
 import concurrent.futures
+import copy
 import json
 import os
 import sys
@@ -277,6 +278,15 @@ class GDocData:
         self.sheet = self.gc.open_by_url( options['gdoc_url'] )
         self.worksheet = self.sheet.get_worksheet(0)
 
+    def next_available_row( self ):
+        '''
+        Returns the next available (empty) row
+
+        @returns: gdoc row index
+        '''
+        str_list = list( filter( None, self.worksheet.col_values(4) ) )
+        return len( str_list ) + 1
+
     def get_switches( self, verbose=False ):
         # Get list of switches
         switches = {}
@@ -307,15 +317,24 @@ class GDocData:
     def get_switches_id( self, has_id=True, verbose=False ):
         # Get list of switches
         switches = self.get_switches()
+        #print( json.dumps( switches, sort_keys=True, indent=4 ) )
+
+        # Filter out switches with/without an Id
+        clear_list = []
+        for brand, elem in switches.items():
+            for index, switch in enumerate( elem ):
+                if not has_id and switch[2]['Plotly Link'] != "":
+                    switches[ brand ][ index ] = []
+                elif has_id and switch[2]['Plotly Link'] == "":
+                    switches[ brand ][ index ] = []
+
+        # Filter out empty switches
+        for brand, elem in switches.items():
+            while [] in elem:
+                elem.remove([])
 
         # Filter out switches with/without an Id
         for brand, elem in switches.copy().items():
-            for index, switch in enumerate( elem ):
-                if not has_id and switch[2]['Plotly Link'] != "":
-                    del elem[ index ]
-                elif has_id and switch[2]['Plotly Link'] == "":
-                    del elem[ index ]
-
             # Clean out brands that are empty
             if len( switches[ brand ] ) == 0:
                 del switches[ brand ]
@@ -331,10 +350,23 @@ class GDocData:
         #print( json.dumps( switches, sort_keys=True, indent=4 ) )
         return switches
 
-    def get_cell( self, column_name, row_index ):
-        # Get list of switches
-        switches = self.get_switches()
+    def update_cells( self, cell_list ):
+        '''
+        Update list of cells into worksheet
 
+        @param cell_list: List of gspread cells
+        '''
+        self.worksheet.update_cells( cell_list )
+
+
+    def get_cell( self, column_name, row_index ):
+        '''
+        Get cell by column name and row index
+
+        @param column_name: String name of column
+        @param row_index:   Integer row index
+        @returns: (cell_name, cell object)
+        '''
         columns = self.worksheet.row_values(1)
         col_index = -1
         # Find column index
@@ -355,38 +387,57 @@ class GDocData:
         # Return tuple of (cell_name, cell)
         return (cell_name, cell)
 
-    def update_switch( self, gdoc_row_index, plotly_metadata, plotly_url ):
-        # TODO
-        print( gdoc_row_index )
-        print( plotly_metadata )
+    def update_cell( self, gdoc_name, gdoc_row, value, overwrite=False ):
+        '''
+        Updates a given cell but does not commit changes
 
-        # Measured
-        self.get_cell( 'Measured', gdoc_row_index ).value = 1
+        Returns a cell object used to commit the changes
 
-        # Actuation
-        self.get_cell( 'Actuation Force', gdoc_row_index )
-        self.get_cell( 'Actuation Energy', gdoc_row_index )
-        # TODO - Update metadata
+        @param gdoc_name:             Column name (gdoc)
+        @param gdoc_row:              Row index (gdoc)
+        @param value:                 Value to write
+        @param overwrite:             Set to True to overwrite current gdoc entry with plotly entry
+        @returns: gspread cell object
+        '''
+        cell = self.get_cell( gdoc_name, gdoc_row )[1]
 
-        # Bottom-out
-        self.get_cell( 'Bottom-out Force', gdoc_row_index )
-        self.get_cell( 'Bottom-out Energy', gdoc_row_index )
-        # TODO - Update metadata
+        # Check if empty and we can't overwrite
+        if cell.value != "" and not overwrite or value == "":
+            return cell
 
-        # Plotly Link
-        self.get_cell( 'Plotly Link', gdoc_row_index ).value = plotly_url
+        # Update entry (not yet committed)
+        cell.value = value
 
-        # Measured Date
-        if plotly_metadata['Created'] != "":
-            self.get_cell( 'Measured Date', gdoc_row_index ).value = plotly_metadata['Created']
+        return cell
 
-        # Updated Date
-        if plotly_metadata['Updated'] != "":
-            self.get_cell( 'Updated Date', gdoc_row_index ).value = plotly_metadata['Updated']
+    def update_switch( self, gdoc_row_index, plotly_metadata, plotly_url, overwrite=False ):
+        print( gdoc_row_index, plotly_url, plotly_metadata['Vendor'], plotly_metadata['Popular Name'] )
+        cell_list = []
 
-        print( self.get_cell( 'Popular Name', gdoc_row_index ) )
-        print( self.get_cell( 'Popular Name', 1 ).value )
-        print( self.get_cell( 'Popular Name', 1 ).input_value )
+        try:
+            # Always updated fields
+            cell_list.append( self.update_cell( 'Measured', gdoc_row_index, 1, True ) )
+            cell_list.append( self.update_cell( 'Measured Date', gdoc_row_index, plotly_metadata['Created'], True ) )
+            cell_list.append( self.update_cell( 'Updated Date', gdoc_row_index, plotly_metadata['Updated'], True ) )
+            cell_list.append( self.update_cell( 'Plotly Link', gdoc_row_index, plotly_url, True ) )
+            cell_list.append( self.update_cell( 'Actuation Energy (gfmm)', gdoc_row_index, plotly_metadata['Actuation Energy'], True ) )
+            cell_list.append( self.update_cell( 'Actuation Force (gf)', gdoc_row_index, plotly_metadata['Actuation Force'], True ) )
+            cell_list.append( self.update_cell( 'Actuation Position (mm)', gdoc_row_index, plotly_metadata['Actuation Position'], True ) )
+            cell_list.append( self.update_cell( 'Reset Force (gf)', gdoc_row_index, plotly_metadata['Reset Force'], True ) )
+            cell_list.append( self.update_cell( 'Reset Position (mm)', gdoc_row_index, plotly_metadata['Reset Position'], True ) )
+            cell_list.append( self.update_cell( 'Total Energy (gfmm)', gdoc_row_index, plotly_metadata['Total Energy'], True ) )
+
+            # Update only fields
+            cell_list.append( self.update_cell( 'Popular Name', gdoc_row_index, plotly_metadata['Popular Name'], overwrite ) )
+            cell_list.append( self.update_cell( 'Vendor', gdoc_row_index, plotly_metadata['Vendor'], overwrite ) )
+            cell_list.append( self.update_cell( 'Part Number', gdoc_row_index, plotly_metadata['Part Number'], overwrite ) )
+        except:
+            print("Skipping")
+            return False
+
+        # Synchronize Changes
+        self.update_cells( cell_list )
+        return True
 
 
 
@@ -442,7 +493,15 @@ if args.sync_plotly_to_gdoc:
     g_switches = g_data.get_switches()
 
     # Get Plotly switch data
-    p_switches = p_data.check_all_switch_metadata( True )
+    # TODO (HaaTa): Support cached plotly data
+    #p_switches = p_data.check_all_switch_metadata( True )
+    #with open('/tmp/metadata_cache.json', 'w') as outfile:
+    #    json.dump(p_switches, outfile, sort_keys=True, indent=4)
+    with open('/tmp/metadata_cache.json', 'r') as infile:
+        p_switches = json.load(infile)
+
+    # Track updated plotly links
+    urls_updated = []
 
     # Match gdoc switch with an id
     for brand, switches in g_switches.items():
@@ -454,20 +513,46 @@ if args.sync_plotly_to_gdoc:
 
             # XXX (HaaTa): There should be only one match for plotly ids
             if len( match ) == 1:
-                g_data.update_switch( switch[1], match[0][1], sw[2][0]['url'] )
+                sw = match[0]
+                url = sw[2][0]['url']
+                g_data.update_switch( switch[1], sw[1], url )
+                urls_updated.append( url )
                 continue
+            elif len( match ) > 1:
+                print("ERROR: There can only be one match for a plotly id")
+                print( match )
+                print( switch )
+                sys.exit( 1 )
 
             # (2) - Popular Name + Part Number match
             match = [ sw for sw in p_switches
                 if sw[1]['Popular Name'] == switch[2]['Popular Name']
                     and sw[1]['Part Number'] == switch[2]['Part Number']
             ]
+
             # XXX (HaaTa): If there isn't only one match, do not update
             if len( match ) == 1:
-                g_data.update_switch( switch[1], match[0][1], sw[2][0]['url'] )
+                sw = match[0]
+                url = sw[2][0]['url']
+                g_data.update_switch( switch[1], sw[1], url )
+                urls_updated.append( url )
                 continue
 
             # (3) - Warn, do not update
             print( "{0} Could isolate Plotly reference for: {1} - {2}".format( WARNING, switch[0], switch[1] ) )
+
+    # Process Plotly Graphs that weren't updated
+    matches = [ sw for sw in p_switches if sw[2][0]['url'] not in urls_updated ]
+    last_row = g_data.next_available_row()
+    for match in matches:
+        sw = match
+        url = sw[2][0]['url']
+        switch = last_row
+
+        # Forceably update switch data (using blank row)
+        ret = g_data.update_switch( switch, sw[1], url, True )
+        if ret:
+            last_row += 1
+
     sys.exit(0)
 
