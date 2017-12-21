@@ -391,7 +391,8 @@ class ForceData:
 
 		# Determine distance range, use raw adc values from press
 		adc_diff = list( np.diff( [ elem.force_adc for elem in self.get('test')[ :self.mid_point() ] ] ) )
-		peaks = peakdet( adc_diff, 200 )[0] # TODO configurable delta and forced range
+		peaks = peakdet( adc_diff, 100 )[0] # TODO configurable delta and forced range
+		#peaks = peakdet( adc_diff, 200 )[0] # TODO configurable delta and forced range
 
 		# XXX Use the peak_detection_index configuration in the json to tweak peak detection
 		# Otherwise just use the first peak
@@ -407,6 +408,7 @@ class ForceData:
 
 		# Use the max force as 2x the median grouped force over the newly calculated distance range (press)
 		force_data = self.force_adc_converted()[ first:last ]
+		print("Force Data:", force_data)
 		max_force_calc = statistics.median_grouped( force_data ) * 2
 		self.set_var('usable_force_range', ( ( 0, max_force_calc ) ) )
 
