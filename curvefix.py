@@ -159,11 +159,26 @@ def next_test_starting_fix( input_file ):
 	looking_for_next_test = False
 	test_count = 0
 	fixes = 0
+	linecount = 0
+	last_line_found = False
 
 	# Read file line-by-line
 	for line in rawfile:
+		linecount += 1
+
 		if line is None:
 			continue
+
+		# Check to see if we found test finished
+		if 'Test Complete' in line:
+			last_line_found = True
+
+		# Make sure we have a start
+		if linecount == 1 and 'Starting Test/Calibration' not in line:
+			# Insert Test Start
+			outfile.write('Starting Test/Calibration\n')
+			# Update stats
+			fixes += 1
 
 		# Check for event, call the associated function
 		event = [ event for event in events.keys() if event in line ]
@@ -207,6 +222,12 @@ def next_test_starting_fix( input_file ):
 		# Ignore other points
 		if any( point ):
 			continue
+
+	# If we haven't found the last line, add it
+	if not last_line_found:
+		outfile.write('Test Complete')
+		# Update stats
+		fixes += 1
 
 	rawfile.close()
 	outfile.close()

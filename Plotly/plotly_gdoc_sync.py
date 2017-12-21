@@ -308,7 +308,7 @@ class GDocData:
         for brand, elem in sorted( switches.items(), key=lambda items: items[0] ):
             if verbose:
                 print( "{0} Switches".format( brand ) )
-            for switch in sorted( elem, key=lambda items: items[0] ):
+            for switch in sorted( elem, key=lambda items: str( items[0] ) ):
                 if verbose:
                     print( "\t{0} {1} - {2}".format( brand, switch[0], switch[1] ) )
 
@@ -494,9 +494,9 @@ if args.sync_plotly_to_gdoc:
 
     # Get Plotly switch data
     # TODO (HaaTa): Support cached plotly data
-    #p_switches = p_data.check_all_switch_metadata( True )
-    #with open('/tmp/metadata_cache.json', 'w') as outfile:
-    #    json.dump(p_switches, outfile, sort_keys=True, indent=4)
+    p_switches = p_data.check_all_switch_metadata( True )
+    with open('/tmp/metadata_cache.json', 'w') as outfile:
+        json.dump(p_switches, outfile, sort_keys=True, indent=4)
     with open('/tmp/metadata_cache.json', 'r') as infile:
         p_switches = json.load(infile)
 

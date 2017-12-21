@@ -2088,7 +2088,7 @@ def processCommandLineArgs( force_data ):
 
 	# Positional Arguments
 	pArgs.add_argument( 'input_files', nargs='+', help=argparse.SUPPRESS ) # Suppressed help output
-	pArgs.add_argument( 'output_files', nargs='+', help=argparse.SUPPRESS ) # Suppressed help output
+	pArgs.add_argument( 'output_files', nargs='*', help=argparse.SUPPRESS ) # Suppressed help output
 
 	# Optional Arguments
 	pArgs.add_argument( '-h', '--help', action="help",
@@ -2122,6 +2122,10 @@ def processCommandLineArgs( force_data ):
 	# Split input and output files
 	input_files = args.input_files
 	output_files = args.output_files
+
+	# Default to plotly if not set
+	if len(output_files) == 0:
+		output_files = ['plotly']
 
 	# Build list of curves to process
 	curves = range(5) # TODO should be a range which matches the number of total curves
