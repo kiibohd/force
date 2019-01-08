@@ -3,7 +3,7 @@
 fcv format conversion and analysis script
 '''
 
-# Copyright (C) 2016-2017 by Jacob Alexander
+# Copyright (C) 2016-2018 by Jacob Alexander
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -276,6 +276,7 @@ class ForceData:
 		# Then the serial and adc curves need to be aligned
 
 		# Align Calibration Serial Force Data
+		print("Midpoint:", midpoint)
 		serial_press = self.force_serial()[ :midpoint ]
 		serial_release = self.force_serial()[ midpoint: ]
 
@@ -652,6 +653,7 @@ class ForceData:
 				if value.force_adc / conv_factor
 			]
 			print( "Max Detected Force:", max(press_max_force_detected ) )
+			print( "Max Force Calculated:", max_force_calc )
 
 		point1 = self.get('test')[ press_max_force_index - 1 ]
 		point2 = self.get('test')[ press_max_force_index ]
@@ -1297,7 +1299,7 @@ class PlotlyForceData( GenericForceData ):
 		# Only hide calibration if there is actual test data
 		visible = 'legendonly'
 		if self.force_data.tests == 1:
-			visible = 'true'
+			visible = True
 
 		# TODO convert to Scatter when less buggy -HaaTa
 		if 0 in self.force_data.options['curves']:
@@ -1383,12 +1385,12 @@ class PlotlyForceData( GenericForceData ):
 				name = "{0}</br>".format( plot_data['test_name'] )
 
 			# Only hide curve if specified
-			visible = 'true'
+			visible = True
 			if index in self.force_data.options['curves_hidden']:
 				visible = 'legendonly'
 			# Show if overridden
 			if 'curves_show' in plot_data.keys() and index in plot_data['curves_show']:
-				visible = 'true'
+				visible = True
 
 			# Only show if not disabled
 			if self.force_data.options['press_disable'] is False:
@@ -1894,7 +1896,7 @@ class PlotlyForceData( GenericForceData ):
 				'showline': False,
 				'showticklabels': True,
 				'tick0': 0,
-				'tickangle': 'auto',
+				#'tickangle': 'auto',
 				'tickcolor': 'rgb(88, 156, 189)',
 				'tickfont': {
 					'color': 'rgb(255, 255, 255)',
@@ -1934,7 +1936,7 @@ class PlotlyForceData( GenericForceData ):
 				'showticklabels': True,
 				'side': 'left',
 				'tick0': 0,
-				'tickangle': 'auto',
+				#'tickangle': 'auto',
 				'tickcolor': 'rgb(88, 156, 189)',
 				'tickfont': {
 					'color': 'rgb(255, 255, 255)',

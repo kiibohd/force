@@ -4,7 +4,7 @@ Kiibohd Force Gauge Python Interface
 Requires Python3 version of pyusb
 '''
 
-# Copyright (C) 2016 by Jacob Alexander
+# Copyright (C) 2016-2018 by Jacob Alexander
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -289,6 +289,8 @@ def json_write():
 		"author" : "Jacob Alexander",
 		"nick" : "HaaTa",
 		"url" : "http://kiibohd.com",
+		"mm_shift" : 0.00,
+		"release_mm_offset" : 0.00,
 		"max_force" : 120,
 		"max_distance" : 4,
 		"distance_bounds" : 0.25,
